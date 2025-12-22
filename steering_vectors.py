@@ -773,22 +773,70 @@ def create_ablation_vectors(
     return results
 
 def compute_mean_steering_norm(
-        model: any,
-        layer_idx: int = -1,
+    model_slug: str,
+    layer_idx: int,
+    cache_dir: Path,
+    concepts: Optional[List[str]] = ALL_CONCEPTS,
 ) -> float:
-    """Compute the mean norm of all cached steering vectors."""
-    for concept in ALL_CONCEPTS:
-        sv_result = compute_generic_vector(
-            model=model,
-            model_slug="temp-model",
-            concept_word=concept,
-            baseline_words=BASELINE_WORDS,
-            prompt_template=GENERIC_PROMPT_TEMPLATE,
-            cache_dir=None,
-            use_remote=False,
-            force_recompute=True,
-        )
-        norms = sv_result.norms()
-        if layer_idx < 0:
-            layer_idx = len(norms) + layer_idx
-        yield norms[layer_idx]
+    """
+    Compute the mean norm of steering vectors across all concepts at a given layer.
+    
+    Args:
+        model: nnsight LanguageModel instance
+        model_slug: Model identifier string
+        layer_idx: Which layer to get norms for
+        cache_dir: Directory containing cached steering vectors
+        concepts: Optional list of concept names to include. If None, uses all cached vectors.
+    
+    Returns:
+        Mean L2 norm across all steering vectors at the specified layer
+    """
+    cache_dir = Path(cache_dir)
+    
+    # List all cached vectors
+    cached = list_cached_vectors(cache_dir)
+    
+    if not cached:
+        raise ValueError(f"No cached steering vectors found in {cache_dir}")
+    
+    norms = []
+    
+    for item in cached:
+        if "error" in item:
+            continue
+        
+        metadata = item.get("info", {})
+        
+        # Filter by model
+        if metadata.get("model_slug") != model_slug:
+            continue
+        
+        # Filter by concepts if specified
+        if concepts is not None:
+            vec_type = metadata.get("type")
+            if vec_type == "generic":
+                concept_word = metadata.get("concept_word", "")
+                if concept_word not in concepts:
+                    continue
+            elif vec_type == "bespoke":
+                # For bespoke, we'd need a different matching strategy
+                pass
+        
+        # Load the vectors
+        result = load_cached_vectors(item["path"])
+        if result is None:
+            continue
+        
+        # Check layer index is valid
+        if layer_idx >= len(result.vectors):
+            print(f"Warning: layer_idx {layer_idx} >= num_layers {len(result.vectors)}, skipping")
+            continue
+        
+        # Get norm at specified layer
+        layer_norm = result.vectors[layer_idx].norm().item()
+        norms.append(layer_norm)
+    
+    if not norms:
+        raise ValueError(f"No valid steering vectors found for model {model_slug}")
+    
+    return sum(norms) / len(norms)

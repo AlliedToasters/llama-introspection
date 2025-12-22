@@ -41,6 +41,7 @@ from steering_vectors import (
     compute_injection_position,
     get_num_layers,
     get_layer_accessor,
+    compute_mean_steering_norm,
 )
 
 
@@ -559,6 +560,12 @@ def run_all_conditions_experiment(
     
     # Pre-compute all steering vectors
     print(f"\nPre-computing steering vectors for {n_concepts} concepts...")
+    mean_steering_norm = compute_mean_steering_norm(
+        model_slug=model_name,
+        layer_idx=layer_indices[0],
+        cache_dir=output_dir,
+        concepts=concepts,
+    )
     steering_vectors = {}
     for concept in concepts:
         if concept in steering_vectors_cache:
@@ -579,7 +586,7 @@ def run_all_conditions_experiment(
             injection_layer = layer_indices[0]
             steering_vectors[concept] = result.vectors[injection_layer]
             steering_vectors_cache[concept] = steering_vectors[concept]
-            print(f"norm={steering_vectors[concept].norm().item():.2f}")
+            print(f"norm={steering_vectors[concept].norm().item():.2f}, norm_frac={steering_vectors[concept].norm().item()/mean_steering_norm:.2f}")
     
     # Pre-generate random vectors (one per "trial" to match concept trials)
     print(f"\nGenerating {n_concepts} random vectors...")
@@ -997,6 +1004,15 @@ def main():
             print(f"Steering vector norm: {steering_vector.norm().item():.2f}")
         
         elif args.condition == "random":
+            # get mean steering norm for scaling
+            print(f"\nComputing mean steering vector norm for random vector scaling...")
+            mean_steering_norm = compute_mean_steering_norm(
+                model_slug=model_name,
+                layer_idx=layer_indices[0],
+                cache_dir=output_dir,
+                concepts=ALL_CONCEPTS,
+            )
+
             # Create random vector with similar norm to typical steering vectors
             torch.manual_seed(args.random_seed)
             random_vector = torch.randn(1, hidden_dim)
