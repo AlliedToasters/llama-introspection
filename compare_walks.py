@@ -46,6 +46,7 @@ except ImportError:
 # Configuration
 # =============================================================================
 
+
 MODEL_SHORTCUTS = {
     "1B": "meta-llama/Llama-3.2-1B-Instruct",
     "1b": "meta-llama/Llama-3.2-1B-Instruct",
@@ -53,8 +54,12 @@ MODEL_SHORTCUTS = {
     "8b": "meta-llama/Llama-3.1-8B-Instruct",
     "70B": "meta-llama/Llama-3.1-70B-Instruct",
     "70b": "meta-llama/Llama-3.1-70B-Instruct",
+    "70B-base": "meta-llama/Llama-3.1-70B",
+    "70b-base": "meta-llama/Llama-3.1-70B",
     "405B": "meta-llama/Llama-3.1-405B-Instruct",
     "405b": "meta-llama/Llama-3.1-405B-Instruct",
+    "405B-base": "meta-llama/Llama-3.1-405B",
+    "405b-base": "meta-llama/Llama-3.1-405B"
 }
 
 # Diverse prompts for trajectory analysis
@@ -146,7 +151,7 @@ def capture_trajectory(
     
     Returns state norms and update norms for analysis.
     """
-    # Get layers reference before tracing (avoid lambda in trace context)
+    # Get layers reference before tracing
     if hasattr(model, '_model') and hasattr(model._model, 'h'):
         # GPT-2 style
         layers = model._model.h
@@ -156,18 +161,14 @@ def capture_trajectory(
     
     num_layers = len(layers)
     
-    # We'll capture the output of each layer (which is the state after that layer)
-    # Update = state[l] - state[l-1]
-    
-    layer_outputs = []
-    
-    # Use trace (forward pass only) instead of generate for reliability
-    # We care about the prefill trajectory, not the generated text
-    with model.trace(prompt, remote=use_remote) as tracer:
-        for l in range(num_layers):
-            l_out = layers[l].output
-            # Take the last token position
-            layer_outputs.append(l_out[:, -1, :].save())
+    # Use the pattern from run_experiment.py that works with remote
+    with model.trace(remote=use_remote) as tracer:
+        layer_outputs = list().save()  # Create and save list FIRST
+        
+        with tracer.invoke(prompt):
+            for l in range(num_layers):
+                # Append to the pre-saved list
+                layer_outputs.append(layers[l].output[:, -1, :])
     
     # Process captured activations
     walk_data = WalkData(
@@ -175,14 +176,13 @@ def capture_trajectory(
         prompt=prompt[:100],
     )
     
-    # No generation in trace mode
     walk_data.response = "(trace mode - no generation)"
     
     # Convert to tensors and compute norms
     states = [lo.detach().cpu().squeeze(0) for lo in layer_outputs]  # [hidden_dim] each
     walk_data.hidden_dim = states[0].shape[-1]
     
-    # State norms (we don't have h_0/embedding easily, so start from layer 0 output)
+    # State norms
     walk_data.state_norms = [s.norm().item() for s in states]
     
     # Update norms: ||h_{l+1} - h_l||
@@ -191,7 +191,6 @@ def capture_trajectory(
         walk_data.update_norms.append(update.norm().item())
     
     # Update-state alignments: cosine similarity between update and current state
-    # Negative = "overwriting" (update opposes current direction)
     for l in range(num_layers - 1):
         update = states[l + 1] - states[l]
         state = states[l]
@@ -499,6 +498,11 @@ def main():
     print(f"\nLoading model...")
     model = LanguageModel(model_name, device_map="auto")
     
+    # Detect if this is a base model (no chat template)
+    is_base_model = not hasattr(model.tokenizer, 'chat_template') or model.tokenizer.chat_template is None
+    if is_base_model:
+        print(f"Detected base model (no chat template) - using raw prompts")
+    
     # Generate or prepare prompts
     raw_prompts_for_json = []  # Human-readable prompts for JSON
     if args.prompt:
@@ -512,14 +516,18 @@ def main():
         raw_prompts = get_prompts(args.n_gens)
         raw_prompts_for_json = raw_prompts
         
-        # Format prompts as chat messages for the model
-        prompts = []
-        for raw_prompt in raw_prompts:
-            messages = [{"role": "user", "content": raw_prompt}]
-            formatted = model.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            prompts.append(formatted)
+        if is_base_model:
+            # Base models: use raw prompts directly (maybe with a simple prefix)
+            prompts = raw_prompts
+        else:
+            # Instruct models: format prompts as chat messages
+            prompts = []
+            for raw_prompt in raw_prompts:
+                messages = [{"role": "user", "content": raw_prompt}]
+                formatted = model.tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                prompts.append(formatted)
         
         # Show first few prompts
         print("Sample prompts:")

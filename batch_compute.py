@@ -34,7 +34,7 @@ DEFAULT_MODELS = [
     "meta-llama/Llama-3.2-1B-Instruct",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.1-70B-Instruct",
-    "meta-llama/Llama-3.1-405B-Instruct",
+    # "meta-llama/Llama-3.1-405B-Instruct",
 ]
 
 RESULTS_DIR = Path("results")
