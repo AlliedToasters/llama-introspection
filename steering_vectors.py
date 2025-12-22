@@ -21,6 +21,11 @@ from pathlib import Path
 from typing import List, Dict, Optional, Callable, Union, Tuple
 from dataclasses import dataclass
 
+_prompts = torch.load("prompts.pt")
+
+BASELINE_WORDS =  _prompts["baseline_words"]
+GENERIC_PROMPT_TEMPLATE = _prompts["generic_prompt_template"]
+ALL_CONCEPTS = list(_prompts['prompts'].keys())
 
 @dataclass
 class SteeringVectorResult:
@@ -766,3 +771,24 @@ def create_ablation_vectors(
             )
     
     return results
+
+def compute_mean_steering_norm(
+        model: any,
+        layer_idx: int = -1,
+) -> float:
+    """Compute the mean norm of all cached steering vectors."""
+    for concept in ALL_CONCEPTS:
+        sv_result = compute_generic_vector(
+            model=model,
+            model_slug="temp-model",
+            concept_word=concept,
+            baseline_words=BASELINE_WORDS,
+            prompt_template=GENERIC_PROMPT_TEMPLATE,
+            cache_dir=None,
+            use_remote=False,
+            force_recompute=True,
+        )
+        norms = sv_result.norms()
+        if layer_idx < 0:
+            layer_idx = len(norms) + layer_idx
+        yield norms[layer_idx]

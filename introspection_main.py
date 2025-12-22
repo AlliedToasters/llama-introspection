@@ -587,7 +587,7 @@ def run_all_conditions_experiment(
     random_vectors = []
     for i in range(n_concepts):
         rv = torch.randn(1, hidden_dim)
-        rv = rv / rv.norm() * 50.0  # Match typical steering norm
+        rv = rv / rv.norm() * mean_steering_norm
         random_vectors.append(rv)
     
     # Run experiment
@@ -1000,7 +1000,7 @@ def main():
             # Create random vector with similar norm to typical steering vectors
             torch.manual_seed(args.random_seed)
             random_vector = torch.randn(1, hidden_dim)
-            random_vector = random_vector / random_vector.norm() * 50.0
+            random_vector = random_vector / random_vector.norm() * mean_steering_norm
             print(f"Random vector norm: {random_vector.norm().item():.2f}")
         
         # Create experiment hash
