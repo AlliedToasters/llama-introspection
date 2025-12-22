@@ -187,6 +187,20 @@ PROMPTS = {
         "grader_prompt": GRADER_PROMPT_TEMPLATE,
         "description": "From paper - emotional concept",
     },
+
+    "test": {
+        "type": "generic",
+        "concept_word": "test",
+        "grader_prompt": GRADER_PROMPT_TEMPLATE,
+        "description": "Not from paper - added to test something",
+    },
+
+    "music": {
+        "type": "generic",
+        "concept_word": "music",
+        "grader_prompt": GRADER_PROMPT_TEMPLATE,
+        "description": "Not from paper - added to test something",
+    }
 }
 
 # =============================================================================

@@ -53,6 +53,7 @@ class SteeringVectorResult:
         return (
             f"SteeringVectors: {self.num_layers} layers, dim={self.hidden_dim}\n"
             f"  Type: {self.metadata.get('type', 'unknown')}\n"
+            f"  Model: {self.metadata.get('model_slug', 'unknown')}\n"
             f"  Norms: min={min(norms):.2f}, max={max(norms):.2f}, mean={sum(norms)/len(norms):.2f}"
         )
 
@@ -102,6 +103,7 @@ def get_num_layers(model) -> int:
 
 def compute_bespoke_vector(
     model,
+    model_slug: str,
     positive_prompt: str,
     negative_prompt: str,
     cache_dir: Optional[Path] = None,
@@ -115,6 +117,7 @@ def compute_bespoke_vector(
     
     Args:
         model: nnsight LanguageModel instance
+        model_slug: Model identifier string (e.g., "meta-llama/Llama-3.2-1B-Instruct")
         positive_prompt: Prompt representing the concept to steer toward
         negative_prompt: Prompt representing the concept to steer away from
         cache_dir: Directory for caching vectors (uses torch.save)
@@ -124,7 +127,6 @@ def compute_bespoke_vector(
     Returns:
         SteeringVectorResult with vectors for each layer
     """
-    model_slug = getattr(model, 'model_name', str(type(model)))
     num_layers = get_num_layers(model)
     layers_accessor = get_layer_accessor(model)
     
@@ -141,13 +143,22 @@ def compute_bespoke_vector(
         if cache_path.exists() and not force_recompute:
             print(f"Loading cached bespoke vectors from {cache_path}")
             cache_data = torch.load(cache_path, weights_only=True)
-            return SteeringVectorResult(
-                vectors=cache_data["vectors"],
-                metadata=cache_data["metadata"],
-                cache_path=cache_path,
-            )
+            cached_vectors = cache_data["vectors"]
+            cached_metadata = cache_data["metadata"]
+            
+            # Verify layer count matches
+            if len(cached_vectors) != num_layers:
+                print(f"  WARNING: Cached vectors have {len(cached_vectors)} layers, model has {num_layers}")
+                print(f"  Recomputing...")
+            else:
+                return SteeringVectorResult(
+                    vectors=cached_vectors,
+                    metadata=cached_metadata,
+                    cache_path=cache_path,
+                )
     
     print(f"Computing bespoke steering vectors for {num_layers} layers...")
+    print(f"  Model: {model_slug}")
     print(f"  Positive: {positive_prompt[:50]}...")
     print(f"  Negative: {negative_prompt[:50]}...")
     
@@ -184,35 +195,35 @@ def compute_bespoke_vector(
     return SteeringVectorResult(vectors=vectors, metadata=metadata, cache_path=cache_path)
 
 
-def compute_generic_vector(
+def compute_baseline_means(
     model,
-    concept_word: str,
+    model_slug: str,
     baseline_words: List[str],
     prompt_template: str = "Tell me about {word}.",
     cache_dir: Optional[Path] = None,
     use_remote: bool = False,
     force_recompute: bool = False,
     batch_size: int = 10,
-) -> SteeringVectorResult:
+) -> Tuple[List[torch.Tensor], Path]:
     """
-    Compute generic (mean-subtracted) steering vector per paper protocol.
+    Compute mean baseline activations across a set of words.
     
-    vec[layer] = activations(concept_prompt)[-1] - mean(activations(baseline_prompts))[-1]
+    This is the expensive part of generic vector computation and can be
+    cached and reused across multiple concept words for the same model.
     
     Args:
         model: nnsight LanguageModel instance
-        concept_word: The concept word to create a vector for
-        baseline_words: List of baseline words for mean subtraction
+        model_slug: Model identifier string
+        baseline_words: List of baseline words
         prompt_template: Template with {word} placeholder
-        cache_dir: Directory for caching vectors
+        cache_dir: Directory for caching
         use_remote: Whether to use NDIF remote execution
         force_recompute: If True, ignore cache and recompute
-        batch_size: Number of baseline words to process per batch
+        batch_size: Number of words to process per batch
     
     Returns:
-        SteeringVectorResult with vectors for each layer
+        Tuple of (baseline_means list, cache_path)
     """
-    model_slug = getattr(model, 'model_name', str(type(model)))
     num_layers = get_num_layers(model)
     layers_accessor = get_layer_accessor(model)
     
@@ -221,22 +232,27 @@ def compute_generic_vector(
     if cache_dir is not None:
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(exist_ok=True)
-        cache_path = get_cache_path(
-            cache_dir, model_slug, "generic",
-            concept_word=concept_word, n_baseline=len(baseline_words)
-        )
+        
+        # Cache key includes model, number of baseline words, and template
+        cache_id = f"{model_slug}|baseline|{len(baseline_words)}|{prompt_template}"
+        cache_hash = hashlib.md5(cache_id.encode()).hexdigest()[:12]
+        cache_path = cache_dir / f"baseline_means_{cache_hash}.pt"
         
         if cache_path.exists() and not force_recompute:
-            print(f"Loading cached generic vectors from {cache_path}")
+            print(f"Loading cached baseline means from {cache_path}")
             cache_data = torch.load(cache_path, weights_only=True)
-            return SteeringVectorResult(
-                vectors=cache_data["vectors"],
-                metadata=cache_data["metadata"],
-                cache_path=cache_path,
-            )
+            cached_means = cache_data["baseline_means"]
+            
+            # Verify layer count matches
+            if len(cached_means) != num_layers:
+                print(f"  WARNING: Cached baseline has {len(cached_means)} layers, model has {num_layers}")
+                print(f"  Recomputing...")
+            else:
+                return cached_means, cache_path
     
-    print(f"Computing generic steering vectors for '{concept_word}'...")
-    print(f"  Computing baseline across {len(baseline_words)} words...")
+    print(f"Computing baseline activations across {len(baseline_words)} words...")
+    print(f"  Model: {model_slug}")
+    print(f"  Layers: {num_layers}")
     
     # Compute baseline mean activations
     baseline_sums = [None] * num_layers
@@ -274,7 +290,104 @@ def compute_generic_vector(
     n_per_layer = n_baseline // num_layers
     baseline_means = [s / n_per_layer for s in baseline_sums]
     
-    # Compute concept activations
+    # Cache results
+    if cache_path is not None:
+        metadata = {
+            "model_slug": model_slug,
+            "n_baseline_words": len(baseline_words),
+            "prompt_template": prompt_template,
+            "num_layers": num_layers,
+        }
+        torch.save({"baseline_means": baseline_means, "metadata": metadata}, cache_path)
+        print(f"  Cached baseline means to {cache_path}")
+    
+    return baseline_means, cache_path
+
+
+def compute_generic_vector(
+    model,
+    model_slug: str,
+    concept_word: str,
+    baseline_words: List[str],
+    prompt_template: str = "Tell me about {word}.",
+    cache_dir: Optional[Path] = None,
+    use_remote: bool = False,
+    force_recompute: bool = False,
+    batch_size: int = 10,
+    baseline_means: Optional[List[torch.Tensor]] = None,
+) -> SteeringVectorResult:
+    """
+    Compute generic (mean-subtracted) steering vector per paper protocol.
+    
+    vec[layer] = activations(concept_prompt)[-1] - mean(activations(baseline_prompts))[-1]
+    
+    Args:
+        model: nnsight LanguageModel instance
+        model_slug: Model identifier string (e.g., "meta-llama/Llama-3.2-1B-Instruct")
+        concept_word: The concept word to create a vector for
+        baseline_words: List of baseline words for mean subtraction
+        prompt_template: Template with {word} placeholder
+        cache_dir: Directory for caching vectors
+        use_remote: Whether to use NDIF remote execution
+        force_recompute: If True, ignore cache and recompute
+        batch_size: Number of baseline words to process per batch
+        baseline_means: Pre-computed baseline means (skips expensive baseline computation)
+    
+    Returns:
+        SteeringVectorResult with vectors for each layer
+    """
+    num_layers = get_num_layers(model)
+    layers_accessor = get_layer_accessor(model)
+    
+    # Check cache
+    cache_path = None
+    if cache_dir is not None:
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(exist_ok=True)
+        cache_path = get_cache_path(
+            cache_dir, model_slug, "generic",
+            concept_word=concept_word, n_baseline=len(baseline_words)
+        )
+        
+        if cache_path.exists() and not force_recompute:
+            print(f"Loading cached generic vectors from {cache_path}")
+            cache_data = torch.load(cache_path, weights_only=True)
+            cached_vectors = cache_data["vectors"]
+            cached_metadata = cache_data["metadata"]
+            
+            # Verify layer count matches
+            if len(cached_vectors) != num_layers:
+                print(f"  WARNING: Cached vectors have {len(cached_vectors)} layers, model has {num_layers}")
+                print(f"  Recomputing...")
+            else:
+                return SteeringVectorResult(
+                    vectors=cached_vectors,
+                    metadata=cached_metadata,
+                    cache_path=cache_path,
+                )
+    
+    print(f"Computing generic steering vector for '{concept_word}'...")
+    print(f"  Model: {model_slug}")
+    print(f"  Layers: {num_layers}")
+    
+    # Get or compute baseline means
+    if baseline_means is not None:
+        print(f"  Using pre-computed baseline means")
+        if len(baseline_means) != num_layers:
+            raise ValueError(f"Baseline means have {len(baseline_means)} layers, model has {num_layers}")
+    else:
+        # Compute baseline (this is the expensive part)
+        baseline_means, _ = compute_baseline_means(
+            model=model,
+            model_slug=model_slug,
+            baseline_words=baseline_words,
+            prompt_template=prompt_template,
+            cache_dir=cache_dir,
+            use_remote=use_remote,
+            batch_size=batch_size,
+        )
+    
+    # Compute concept activations (cheap - just one forward pass)
     print(f"  Computing concept activations for '{concept_word}'...")
     concept_prompt = prompt_template.format(word=concept_word.lower())
     
@@ -312,6 +425,7 @@ def compute_generic_vector(
 
 def compute_random_vector(
     model,
+    model_slug: str,
     seed: int = 42,
     normalize_to: Optional[float] = None,
     match_norms_from: Optional[SteeringVectorResult] = None,
@@ -323,6 +437,7 @@ def compute_random_vector(
     
     Args:
         model: nnsight LanguageModel instance (for dimension info)
+        model_slug: Model identifier string
         seed: Random seed for reproducibility
         normalize_to: If set, normalize all vectors to this L2 norm
         match_norms_from: If set, match norms layer-by-layer from another result
@@ -332,7 +447,6 @@ def compute_random_vector(
     Returns:
         SteeringVectorResult with random vectors for each layer
     """
-    model_slug = getattr(model, 'model_name', str(type(model)))
     num_layers = get_num_layers(model)
     layers_accessor = get_layer_accessor(model)
     
@@ -368,6 +482,7 @@ def compute_random_vector(
             return result
     
     print(f"Computing random steering vectors (seed={seed})...")
+    print(f"  Model: {model_slug}")
     print(f"  Layers: {num_layers}, Hidden dim: {hidden_dim}")
     
     torch.manual_seed(seed)
@@ -572,6 +687,7 @@ def compute_injection_position(
 
 def create_ablation_vectors(
     model,
+    model_slug: str,
     reference_vectors: SteeringVectorResult,
     ablation_types: List[str] = ["random_matched", "scaled_0.5", "scaled_2.0"],
     seed: int = 42,
@@ -582,6 +698,7 @@ def create_ablation_vectors(
     
     Args:
         model: nnsight LanguageModel instance
+        model_slug: Model identifier string
         reference_vectors: The original steering vectors to create ablations for
         ablation_types: List of ablation types to create
         seed: Random seed for random vectors
@@ -596,14 +713,14 @@ def create_ablation_vectors(
         if ablation_type == "random_matched":
             # Random vectors with matched layer-wise norms
             results[ablation_type] = compute_random_vector(
-                model, seed=seed, match_norms_from=reference_vectors, cache_dir=cache_dir
+                model, model_slug, seed=seed, match_norms_from=reference_vectors, cache_dir=cache_dir
             )
         
         elif ablation_type.startswith("random_norm_"):
             # Random vectors with fixed norm
             norm = float(ablation_type.split("_")[-1])
             results[ablation_type] = compute_random_vector(
-                model, seed=seed, normalize_to=norm, cache_dir=cache_dir
+                model, model_slug, seed=seed, normalize_to=norm, cache_dir=cache_dir
             )
         
         elif ablation_type.startswith("scaled_"):
