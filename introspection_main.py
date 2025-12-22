@@ -251,16 +251,23 @@ def run_concept_trial(
 
 
 def run_random_trial(
+    args,
     model,
     layers,
+    hidden_dim: int,
+    mean_steering_norm: float,
     injection_prompt: str,
     layer_idx: int,
-    random_vector: torch.Tensor,
     strength: float,
     injection_start_pos: int,
     use_remote: bool = False,
 ) -> tuple[str, dict]:
     """Run a random vector injection trial (same as concept but different vector)."""
+            # Create random vector with similar norm to typical steering vectors
+    torch.manual_seed(args.random_seed)
+    random_vector = torch.randn(1, hidden_dim)
+    random_vector = random_vector / random_vector.norm() * mean_steering_norm
+    print(f"Random vector norm: {random_vector.norm().item():.2f}")
     return run_concept_trial(
         model, layers, injection_prompt, layer_idx, 
         random_vector, strength, injection_start_pos, use_remote
@@ -320,6 +327,9 @@ def run_scale_trial(
 
 def run_experiment(
     model,
+    hidden_dim,
+    mean_steering_norm,
+    args, 
     model_name: str,
     condition: str,
     concept: str,
@@ -424,8 +434,8 @@ def run_experiment(
                         )
                     elif condition == "random":
                         text, geometry = run_random_trial(
-                            model, layers, injection_prompt, layer_idx,
-                            random_vector, strength, injection_start_pos, use_remote
+                            args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
+                            strength, injection_start_pos, use_remote
                         )
                     elif condition == "scale":
                         text, geometry = run_scale_trial(
@@ -496,6 +506,7 @@ def run_experiment(
 
 def run_all_conditions_experiment(
     model,
+    args,
     model_name: str,
     layers,
     injection_prompt: str,
@@ -696,8 +707,8 @@ def run_all_conditions_experiment(
                 trial_idx = existing_random_trials + i
                 try:
                     text, geometry = run_random_trial(
-                        model, layers, injection_prompt, layer_idx,
-                        random_vectors[trial_idx], strength, injection_start_pos, use_remote
+                        args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
+                        strength, injection_start_pos, use_remote
                     )
                     grade = grade_response(client, text, "random", None)
                     
@@ -964,6 +975,7 @@ def main():
         
         results, stopped_at, config = run_all_conditions_experiment(
             model=model,
+            args=args,
             model_name=model_name,
             layers=layers,
             injection_prompt=injection_prompt,
@@ -1012,12 +1024,6 @@ def main():
                 cache_dir=output_dir,
                 concepts=ALL_CONCEPTS,
             )
-
-            # Create random vector with similar norm to typical steering vectors
-            torch.manual_seed(args.random_seed)
-            random_vector = torch.randn(1, hidden_dim)
-            random_vector = random_vector / random_vector.norm() * mean_steering_norm
-            print(f"Random vector norm: {random_vector.norm().item():.2f}")
         
         # Create experiment hash
         exp_id = f"{model_name}|{args.condition}|{args.concept if args.condition == 'concept' else 'none'}"
@@ -1028,6 +1034,9 @@ def main():
         
         results, stopped_at, config = run_experiment(
             model=model,
+            hidden_dim=hidden_dim,
+            mean_steering_norm=mean_steering_norm,
+            args=args,
             model_name=model_name,
             condition=args.condition,
             concept=args.concept,
