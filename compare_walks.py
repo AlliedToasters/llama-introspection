@@ -146,31 +146,28 @@ def capture_trajectory(
     
     Returns state norms and update norms for analysis.
     """
-    layers_accessor = get_layer_accessor(model)
-    num_layers = len(layers_accessor(model))
+    # Get layers reference before tracing (avoid lambda in trace context)
+    if hasattr(model, '_model') and hasattr(model._model, 'h'):
+        # GPT-2 style
+        layers = model._model.h
+    else:
+        # LLaMA style
+        layers = model.model.layers
+    
+    num_layers = len(layers)
     
     # We'll capture the output of each layer (which is the state after that layer)
     # Update = state[l] - state[l-1]
     
     layer_outputs = []
     
-    with model.generate(max_new_tokens=max_new_tokens, remote=use_remote) as tracer:
-        with tracer.invoke(prompt):
-            # Capture embedding (before any layers)
-            # For Llama, we can get this from model.model.embed_tokens output
-            # But simpler: capture layer 0 input via its output minus its contribution
-            # Actually, let's just capture all layer outputs and compute differences
-            
-            with tracer.iter[0]:  # Prefill pass
-                # Capture output of each layer
-                for l in range(num_layers):
-                    l_out = layers_accessor(model)[l].output
-                    # Take mean across sequence positions for a single norm value
-                    # Or take the last token position
-                    layer_outputs.append(l_out[:, -1, :].save())  # Last token
-        
-        with tracer.invoke():
-            output = model.generator.output.save()
+    # Use trace (forward pass only) instead of generate for reliability
+    # We care about the prefill trajectory, not the generated text
+    with model.trace(prompt, remote=use_remote) as tracer:
+        for l in range(num_layers):
+            l_out = layers[l].output
+            # Take the last token position
+            layer_outputs.append(l_out[:, -1, :].save())
     
     # Process captured activations
     walk_data = WalkData(
@@ -178,11 +175,8 @@ def capture_trajectory(
         prompt=prompt[:100],
     )
     
-    # Decode the generated response
-    response_text = model.tokenizer.decode(output[0], skip_special_tokens=True)
-    # Extract just the generated part (after the prompt)
-    # The prompt may have special tokens stripped, so try to find overlap
-    walk_data.response = response_text
+    # No generation in trace mode
+    walk_data.response = "(trace mode - no generation)"
     
     # Convert to tensors and compute norms
     states = [lo.detach().cpu().squeeze(0) for lo in layer_outputs]  # [hidden_dim] each
@@ -535,10 +529,13 @@ def main():
         if len(raw_prompts) > 3:
             print(f"  ... and {len(raw_prompts) - 3} more")
     
-    # Warm up
-    print("\nWarming up...")
-    with model.generate("test", max_new_tokens=1, remote=args.use_remote):
-        _ = model.generator.output.save()
+    # Warm up (only needed for local execution)
+    if not args.use_remote:
+        print("\nWarming up...")
+        with model.trace("test", remote=False):
+            pass
+    else:
+        print("\nSkipping warmup (remote execution)")
     
     # Run generations and capture trajectories
     print(f"\nCapturing {args.n_gens} trajectories...")
