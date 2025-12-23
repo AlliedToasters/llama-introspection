@@ -1022,15 +1022,14 @@ def main():
             steering_vector = result.vectors[injection_layer]
             print(f"Steering vector norm: {steering_vector.norm().item():.2f}")
         
-        elif args.condition == "random":
-            # get mean steering norm for scaling
-            print(f"\nComputing mean steering vector norm for random vector scaling...")
-            mean_steering_norm = compute_mean_steering_norm(
-                model_slug=model_name,
-                layer_idx=layer_indices[0],
-                cache_dir=output_dir,
-                concepts=ALL_CONCEPTS,
-            )
+        # get mean steering norm for scaling
+        print(f"\nComputing mean steering vector norm for random vector scaling...")
+        mean_steering_norm = compute_mean_steering_norm(
+            model_slug=model_name,
+            layer_idx=layer_indices[0],
+            cache_dir=output_dir,
+            concepts=ALL_CONCEPTS,
+        )
         
         # Create experiment hash
         exp_id = f"{model_name}|{args.condition}|{args.concept if args.condition == 'concept' else 'none'}"
