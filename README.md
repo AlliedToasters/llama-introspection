@@ -4,6 +4,8 @@ Reproduces experiments from Anthropic's introspection paper on Llama-3.1-Instruc
 
 **Paper:** https://transformer-circuits.pub/2025/introspection/index.html
 
+![results plot](assets/result.png)
+
 ## Setup
 
 1. Install dependencies (recommend using a venv):
