@@ -251,9 +251,10 @@ def run_concept_trial(
 
 
 def run_random_trial(
-    args,
-    model,
-    layers,
+    trial_num: int,
+    args: any,
+    model: any,
+    layers: any,
     hidden_dim: int,
     mean_steering_norm: float,
     injection_prompt: str,
@@ -263,11 +264,12 @@ def run_random_trial(
     use_remote: bool = False,
 ) -> tuple[str, dict]:
     """Run a random vector injection trial (same as concept but different vector)."""
-            # Create random vector with similar norm to typical steering vectors
-    torch.manual_seed(args.random_seed)
+    # Create random vector with similar norm to typical steering vectors
+    torch.manual_seed(args.random_seed + trial_num)
     random_vector = torch.randn(1, hidden_dim)
     random_vector = random_vector / random_vector.norm() * mean_steering_norm
     print(f"Random vector norm: {random_vector.norm().item():.2f}")
+    print(f"Random vector last element: {random_vector[0, -1].item():.4f}")
     return run_concept_trial(
         model, layers, injection_prompt, layer_idx, 
         random_vector, strength, injection_start_pos, use_remote
@@ -434,7 +436,7 @@ def run_experiment(
                         )
                     elif condition == "random":
                         text, geometry = run_random_trial(
-                            args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
+                            trial_num, args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
                             strength, injection_start_pos, use_remote
                         )
                     elif condition == "scale":
@@ -707,7 +709,7 @@ def run_all_conditions_experiment(
                 trial_idx = existing_random_trials + i
                 try:
                     text, geometry = run_random_trial(
-                        args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
+                        trial_idx, args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
                         strength, injection_start_pos, use_remote
                     )
                     grade = grade_response(client, text, "random", None)
