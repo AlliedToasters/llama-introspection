@@ -42,50 +42,51 @@ def parse_args():
 def unpack_rows(results: dict) -> list:
     intervention_layer = list(results.keys())[0]
     _data = results[intervention_layer]
-    strength = list(_data.keys())[0]
-    _data = _data[strength]
+    strengths = list(_data.keys())
     rows = []
-    for item in _data:
-        full_text = item['text']
-        response = "assistant".join(full_text.split("assistant")[2:])
-        geometry = item['geometry']
-        pre_norm = geometry['pre_norm']
-        post_norm = geometry['post_norm']
-        l2_distance = geometry.get('l2_distance')
-        if l2_distance is None:
-            print(f"Weird geometry: {geometry}")
-            print(f"Deriving l2_distance from norms...")
-            # this seems to happen only for scale interventions,
-            # so we can just subtract post - pre
-            l2_distance = post_norm - pre_norm
-        grade = item['grade']
-        # we use 'get' accessor for claude responses because some fields may be missing
-        # thanks, Claude
-        refusal = grade.get('refusal')
-        affirmative = grade.get('affirmative')
-        correct_id = grade.get('correct_id')
-        early_detection = grade.get('early_detection')
-        coherent = grade.get('coherent')
-        grader_reasoning = grade.get('reasoning')
-        concept = item.get('concept', 'N/A')
-        row = {
-            "intervention_layer": intervention_layer,
-            "strength": strength,
-            "concept": concept,
-            "full_text": full_text,
-            "response": response,
-            "pre_norm": pre_norm,
-            "post_norm": post_norm,
-            "l2_distance": l2_distance,
-            "refusal": refusal,
-            "affirmative": affirmative,
-            "correct_id": correct_id,
-            "early_detection": early_detection,
-            "coherent": coherent,
-            "grader_reasoning": grader_reasoning,
-            "trial": item.get('trial', -1),
-        }
-        rows.append(row)
+    for strength in strengths:
+        __data = _data[strength]
+        for item in __data:
+            full_text = item['text']
+            response = "assistant".join(full_text.split("assistant")[2:])
+            geometry = item['geometry']
+            pre_norm = geometry['pre_norm']
+            post_norm = geometry['post_norm']
+            l2_distance = geometry.get('l2_distance')
+            if l2_distance is None:
+                print(f"Weird geometry: {geometry}")
+                print(f"Deriving l2_distance from norms...")
+                # this seems to happen only for scale interventions,
+                # so we can just subtract post - pre
+                l2_distance = post_norm - pre_norm
+            grade = item['grade']
+            # we use 'get' accessor for claude responses because some fields may be missing
+            # thanks, Claude
+            refusal = grade.get('refusal')
+            affirmative = grade.get('affirmative')
+            correct_id = grade.get('correct_id')
+            early_detection = grade.get('early_detection')
+            coherent = grade.get('coherent')
+            grader_reasoning = grade.get('reasoning')
+            concept = item.get('concept', 'N/A')
+            row = {
+                "intervention_layer": intervention_layer,
+                "strength": strength,
+                "concept": concept,
+                "full_text": full_text,
+                "response": response,
+                "pre_norm": pre_norm,
+                "post_norm": post_norm,
+                "l2_distance": l2_distance,
+                "refusal": refusal,
+                "affirmative": affirmative,
+                "correct_id": correct_id,
+                "early_detection": early_detection,
+                "coherent": coherent,
+                "grader_reasoning": grader_reasoning,
+                "trial": item.get('trial', -1),
+            }
+            rows.append(row)
     return rows
         
 
@@ -331,7 +332,8 @@ if __name__ == "__main__":
             row['intervention'] = 'scale'
         rows.extend(_new_rows)
         df = pd.DataFrame(rows, columns=output_cols)
-        # save final results
+        
+    # save final results
     final_results_path = Path(args.output_dir) / f"introspection_battery_results_{args.model}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(final_results_path, index=False)
 
