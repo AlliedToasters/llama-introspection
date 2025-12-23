@@ -6,3 +6,8 @@ python run_experiment.py --prompt-label "all-caps/shouting/loudness" --n-trials 
 
 python run_experiment.py --prompt-label "all-caps/shouting/loudness" --n-trials 6 --n-layers 1 --model meta-llama/Llama-3.1-8B-Instruct
 ```
+
+plotgen
+```
+meta-llama/Llama-3.1-70B-Instruct
+```

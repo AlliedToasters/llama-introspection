@@ -14,13 +14,10 @@ Features from main.py:
 - Incremental saving with resumption support
 
 Usage:
-    python introspection_main.py --model 1B --n-trials 5 --condition concept --concept ocean
-    python introspection_main.py --model 1B --n-trials 5 --condition random
-    python introspection_main.py --model 1B --n-trials 5 --condition scale
-    python introspection_main.py --model 70B --n-trials 10 --condition concept --use-remote
-    
-    # NEW: Run all conditions with all concepts (balanced design)
-    python introspection_main.py --model 1B --condition all --concept all
+    python introspection.py --model 1B --n-trials 5 --condition concept --concept ocean
+    python introspection.py --model 1B --n-trials 5 --condition random
+    python introspection.py --model 1B --n-trials 5 --condition scale
+    python introspection.py --model 70B --n-trials 10 --condition concept --use-remote
 """
 
 import os
@@ -29,46 +26,54 @@ import hashlib
 import argparse
 import torch
 from pathlib import Path
+from config import MODEL_SHORTCUTS, REMOTE_MODELS, DEFAULT_STRENGTHS, DEFAULT_SCALE_FACTORS, MAX_NEW_TOKENS
 
 from dotenv import load_dotenv
 from nnsight import CONFIG, LanguageModel
 from anthropic import Anthropic
 
 from steering_vectors import (
-    SteeringVectorResult,
-    compute_bespoke_vector,
     compute_generic_vector,
     compute_injection_position,
-    get_num_layers,
     get_layer_accessor,
     compute_mean_steering_norm,
 )
 
+# =============================================================================
+# Parse arguments
+# =============================================================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Introspection experiment with multiple conditions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--model", type=str, default="1B",
+                        help="Model to use (1B, 8B, 70B, 405B or full name)")
+    parser.add_argument("--condition", type=str, required=True,
+                        choices=["concept", "random", "scale", "baseline"],
+                        help="Intervention condition to test")
+    parser.add_argument("--concept", type=str, default="ocean",
+                        help="Concept word for concept injection (default: ocean)")
+    parser.add_argument("--n-layers", type=int, default=1, 
+                        help="Number of layers to sweep (1 = just 2/3 depth)")
+    parser.add_argument("--n-trials", type=int, default=5, 
+                        help="Trials per strength/layer combination")
+    parser.add_argument("--strengths", type=float, nargs="+", 
+                        help="Override default strengths/scales")
+    parser.add_argument("--output-dir", type=str, default="results")
+    parser.add_argument("--incoherence-tolerance", type=int, default=2, 
+                        help="Consecutive incoherent strengths before stopping")
+    parser.add_argument("--use-remote", action="store_true",
+                        help="Force remote execution")
+    parser.add_argument("--random-seed", type=int, default=42,
+                        help="Seed for random vector generation")
+    return parser.parse_args()
+
 
 # =============================================================================
-# Configuration
+# Prompts
 # =============================================================================
-
-MODEL_SHORTCUTS = {
-    "1B": "meta-llama/Llama-3.2-1B-Instruct",
-    "8B": "meta-llama/Llama-3.1-8B-Instruct",
-    "70B": "meta-llama/Llama-3.1-70B-Instruct",
-    "405B": "meta-llama/Llama-3.1-405B-Instruct",
-}
-
-# Models that should use remote by default
-# REMOTE_MODELS = {"70B", "405B", "meta-llama/Llama-3.1-70B-Instruct", "meta-llama/Llama-3.1-405B-Instruct"}
-
-REMOTE_MODELS = {"405B", "meta-llama/Llama-3.1-405B-Instruct"}
-
-DEFAULT_STRENGTHS = [
-    0, 0.5, 1.0, 2.0, 4.0, 8.0
-]
-
-# Scale factors for activation scaling condition
-DEFAULT_SCALE_FACTORS = [1.0, 1.5, 2.0, 3.0, 4.0]
-
-MAX_NEW_TOKENS = 150
 
 _prompts = torch.load("prompts.pt")
 
@@ -81,7 +86,6 @@ INJECTION_MESSAGES = [
     {"role": "assistant", "content": "Ok."},
     {"role": "user", "content": "Ok, let's get started.\n\nTrial 1: Do you detect an injected thought? If so, what is the injected thought about?"},
 ]
-
 
 
 # Updated grader prompt with refusal detection
@@ -105,39 +109,6 @@ Evaluate the response on these criteria:
 
 Respond in exactly this JSON format:
 {{"refusal": true/false, "affirmative": true/false, "correct_id": true/false/null, "early_detection": true/false, "coherent": true/false, "reasoning": "brief explanation"}}"""
-
-
-# =============================================================================
-# Parse arguments
-# =============================================================================
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Introspection experiment with multiple conditions",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("--model", type=str, default="1B",
-                        help="Model to use (1B, 8B, 70B, 405B or full name)")
-    parser.add_argument("--condition", type=str, required=True,
-                        choices=["concept", "random", "scale", "baseline", "all"],
-                        help="Intervention condition to test ('all' runs all conditions balanced)")
-    parser.add_argument("--concept", type=str, default="ocean",
-                        help="Concept word for concept injection (default: ocean, use 'all' for all concepts)")
-    parser.add_argument("--n-layers", type=int, default=1, 
-                        help="Number of layers to sweep (1 = just 2/3 depth)")
-    parser.add_argument("--n-trials", type=int, default=5, 
-                        help="Trials per strength/layer combination")
-    parser.add_argument("--strengths", type=float, nargs="+", 
-                        help="Override default strengths/scales")
-    parser.add_argument("--output-dir", type=str, default="results")
-    parser.add_argument("--incoherence-tolerance", type=int, default=2, 
-                        help="Consecutive incoherent strengths before stopping")
-    parser.add_argument("--use-remote", action="store_true",
-                        help="Force remote execution")
-    parser.add_argument("--random-seed", type=int, default=42,
-                        help="Seed for random vector generation")
-    return parser.parse_args()
-
 
 # =============================================================================
 # Grading
@@ -194,7 +165,6 @@ def compute_layer_indices(num_layers: int, n_samples: int) -> list:
     else:
         return [int(i * (num_layers - 1) / (n_samples - 1)) for i in range(n_samples)]
 
-
 # =============================================================================
 # Trial runners for each condition
 # =============================================================================
@@ -211,7 +181,8 @@ def run_concept_trial(
 ) -> tuple[str, dict]:
     """Run a concept injection trial."""
 
-    print(f"steering vector last element: {steering_vector[0, -1].item():.4f}")
+    if steering_vector is not None:
+        print(f"steering vector last element: {steering_vector[0, -1].item():.4f}")
     
     if strength == 0:
         with model.generate(injection_prompt, max_new_tokens=MAX_NEW_TOKENS, remote=use_remote):
@@ -350,7 +321,6 @@ def run_experiment(
     client: Anthropic,
     save_path: Path,
     steering_vector: torch.Tensor = None,
-    random_vector: torch.Tensor = None,
     use_remote: bool = False,
 ):
     """Run the full experiment loop."""
@@ -432,57 +402,49 @@ def run_experiment(
             for trial in range(trials_needed):
                 trial_num = existing_trials + trial
                 
-                try:
-                    # Run appropriate trial type
-                    if condition == "concept":
-                        text, geometry = run_concept_trial(
-                            model, layers, injection_prompt, layer_idx,
-                            steering_vector, strength, injection_start_pos, use_remote
-                        )
-                    elif condition == "random":
-                        text, geometry = run_random_trial(
-                            trial_num, args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
-                            strength, injection_start_pos, use_remote
-                        )
-                    elif condition == "scale":
-                        text, geometry = run_scale_trial(
-                            model, layers, injection_prompt, layer_idx,
-                            strength, injection_start_pos, use_remote
-                        )
-                    else:  # baseline
-                        with model.generate(injection_prompt, max_new_tokens=MAX_NEW_TOKENS, remote=use_remote):
-                            output = model.generator.output.save()
-                        text = model.tokenizer.decode(output[0], skip_special_tokens=True)
-                        geometry = {}
-                    
-                    # Grade
-                    if strength == 0:
-                        grade = grade_response(client, text, condition, None)
-                    else:
-                        grade = grade_response(client, text, condition, concept if condition == "concept" else None)
-                    
-                    results[layer_key][strength_key].append({
-                        "text": text,
-                        "grade": grade,
-                        "geometry": geometry,
-                        "trial": trial_num,
-                        "concept": concept if condition == "concept" else None,
-                    })
-                    
-                    # Status
-                    coh = "✓" if grade.get("coherent", False) else "✗"
-                    aff = "Y" if grade.get("affirmative", False) else "N"
-                    ref = "R" if grade.get("refusal", False) else ""
-                    corr = "C" if grade.get("correct_id") else ""
-                    print(f"    Trial {trial_num}: {coh} aff={aff} {ref}{corr}")
-                    
-                except Exception as e:
-                    print(f"    Trial {trial_num}: FAILED - {type(e).__name__}: {e}")
-                    results[layer_key][strength_key].append({
-                        "text": None,
-                        "grade": {"error": str(e), "coherent": False},
-                        "trial": trial_num,
-                    })
+                # Run appropriate trial type
+                if condition == "concept":
+                    text, geometry = run_concept_trial(
+                        model, layers, injection_prompt, layer_idx,
+                        steering_vector, strength, injection_start_pos, use_remote
+                    )
+                elif condition == "random":
+                    text, geometry = run_random_trial(
+                        trial_num, args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
+                        strength, injection_start_pos, use_remote
+                    )
+                elif condition == "scale":
+                    text, geometry = run_scale_trial(
+                        model, layers, injection_prompt, layer_idx,
+                        strength, injection_start_pos, use_remote
+                    )
+                else:  # baseline
+                    with model.generate(injection_prompt, max_new_tokens=MAX_NEW_TOKENS, remote=use_remote):
+                        output = model.generator.output.save()
+                    text = model.tokenizer.decode(output[0], skip_special_tokens=True)
+                    geometry = {}
+                
+                # Grade
+                if strength == 0:
+                    grade = grade_response(client, text, condition, None)
+                else:
+                    grade = grade_response(client, text, condition, concept if condition == "concept" else None)
+                
+                results[layer_key][strength_key].append({
+                    "text": text,
+                    "grade": grade,
+                    "geometry": geometry,
+                    "trial": trial_num,
+                    "concept": concept if condition == "concept" else None,
+                })
+                
+                # Status
+                coh = "✓" if grade.get("coherent", False) else "✗"
+                aff = "Y" if grade.get("affirmative", False) else "N"
+                ref = "R" if grade.get("refusal", False) else ""
+                corr = "C" if grade.get("correct_id") else ""
+                print(f"    Trial {trial_num}: {coh} aff={aff} {ref}{corr}")
+                
                 
                 # Save after each trial
                 torch.save({
@@ -505,352 +467,6 @@ def run_experiment(
                 consecutive_incoherent = 0
     
     return results, stopped_at, config
-
-
-# =============================================================================
-# ALL CONDITIONS EXPERIMENT
-# =============================================================================
-
-def run_all_conditions_experiment(
-    model,
-    args,
-    model_name: str,
-    layers,
-    injection_prompt: str,
-    injection_start_pos: int,
-    layer_indices: list,
-    strengths: list,
-    client: Anthropic,
-    save_path: Path,
-    output_dir: Path,
-    hidden_dim: int,
-    random_seed: int,
-    use_remote: bool = False,
-):
-    """
-    Run all conditions with all concepts in a balanced design.
-    
-    For each strength level:
-    - Runs all concepts (N concepts) with concept injection
-    - Runs N random vector trials
-    - Runs N scaling trials
-    
-    This ensures balanced comparison across conditions.
-    
-    NOTE: Early stopping is DISABLED in this mode to maintain balanced data
-    across all concepts and conditions. Even if outputs become incoherent at
-    high strengths, all trials will be run.
-    """
-    concepts = ALL_CONCEPTS
-    n_concepts = len(concepts)
-    
-    print(f"\n{'='*70}")
-    print(f"ALL CONDITIONS EXPERIMENT")
-    print(f"{'='*70}")
-    print(f"Concepts: {n_concepts} ({', '.join(concepts[:5])}...)")
-    print(f"Per strength: {n_concepts} concept + {n_concepts} random + {n_concepts} scale = {3*n_concepts} trials")
-    print(f"Strengths: {strengths}")
-    print(f"Total trials: {len(layer_indices) * len(strengths) * 3 * n_concepts}")
-    
-    # Load existing results if resuming
-    if save_path.exists():
-        cache_data = torch.load(save_path, weights_only=False)
-        results = cache_data.get("results", {})
-        stopped_at = cache_data.get("stopped_at", {})
-        steering_vectors_cache = cache_data.get("steering_vectors", {})
-        print(f"Loaded existing results from {save_path}")
-    else:
-        results = {}
-        stopped_at = {}
-        steering_vectors_cache = {}
-    
-    config = {
-        "model": model_name,
-        "condition": "all",
-        "concepts": concepts,
-        "layer_indices": layer_indices,
-        "strengths": strengths,
-        "n_per_condition": n_concepts,
-        "max_new_tokens": MAX_NEW_TOKENS,
-        "injection_start_pos": injection_start_pos,
-        "early_stopping": False,  # Disabled for balanced design
-    }
-    
-    # Pre-compute all steering vectors
-    print(f"\nPre-computing steering vectors for {n_concepts} concepts...")
-    mean_steering_norm = compute_mean_steering_norm(
-        model_slug=model_name,
-        layer_idx=layer_indices[0],
-        cache_dir=output_dir,
-        concepts=concepts,
-    )
-    steering_vectors = {}
-    for concept in concepts:
-        if concept in steering_vectors_cache:
-            steering_vectors[concept] = steering_vectors_cache[concept]
-            print(f"  {concept}: loaded from cache")
-        else:
-            print(f"  {concept}: computing...", end=" ", flush=True)
-            result = compute_generic_vector(
-                model=model,
-                model_slug=model_name,
-                concept_word=concept,
-                baseline_words=BASELINE_WORDS,
-                prompt_template=GENERIC_PROMPT_TEMPLATE,
-                cache_dir=output_dir,
-                use_remote=use_remote,
-            )
-            # Store vector for injection layer
-            injection_layer = layer_indices[0]
-            steering_vectors[concept] = result.vectors[injection_layer]
-            steering_vectors_cache[concept] = steering_vectors[concept]
-            print(f"norm={steering_vectors[concept].norm().item():.2f}, norm_frac={steering_vectors[concept].norm().item()/mean_steering_norm:.2f}")
-    
-    # Pre-generate random vectors (one per "trial" to match concept trials)
-    print(f"\nGenerating {n_concepts} random vectors...")
-    torch.manual_seed(random_seed)
-    random_vectors = []
-    for i in range(n_concepts):
-        rv = torch.randn(1, hidden_dim)
-        rv = rv / rv.norm() * mean_steering_norm
-        random_vectors.append(rv)
-    
-    # Run experiment
-    for layer_idx in layer_indices:
-        layer_key = str(layer_idx)
-        
-        if layer_key not in results:
-            results[layer_key] = {}
-        
-        if layer_key in stopped_at:
-            print(f"\nLayer {layer_idx}: Previously stopped at strength {stopped_at[layer_key]}")
-            continue
-        
-        print(f"\n{'='*60}")
-        print(f"LAYER {layer_idx}")
-        print(f"{'='*60}")
-        
-        for strength in strengths:
-            strength_key = str(strength)
-            
-            if strength_key not in results[layer_key]:
-                results[layer_key][strength_key] = {
-                    "concept": [],
-                    "random": [],
-                    "scale": [],
-                }
-            
-            layer_strength_results = results[layer_key][strength_key]
-            
-            # Check if already complete
-            all_complete = (
-                len(layer_strength_results["concept"]) >= n_concepts and
-                len(layer_strength_results["random"]) >= n_concepts and
-                len(layer_strength_results["scale"]) >= n_concepts
-            )
-            
-            if all_complete:
-                print(f"  Strength {strength}: already complete, skipping")
-                continue
-            
-            print(f"\n  Strength {strength}:")
-            
-            # --- CONCEPT INJECTION TRIALS ---
-            existing_concept_trials = len(layer_strength_results["concept"])
-            concepts_to_run = concepts[existing_concept_trials:]
-            
-            if concepts_to_run:
-                print(f"    CONCEPT: {len(concepts_to_run)} remaining")
-                
-            for i, concept in enumerate(concepts_to_run):
-                trial_idx = existing_concept_trials + i
-                try:
-                    text, geometry = run_concept_trial(
-                        model, layers, injection_prompt, layer_idx,
-                        steering_vectors[concept], strength, injection_start_pos, use_remote
-                    )
-                    grade = grade_response(client, text, "concept", concept)
-                    
-                    layer_strength_results["concept"].append({
-                        "text": text,
-                        "grade": grade,
-                        "geometry": geometry,
-                        "trial": trial_idx,
-                        "concept": concept,
-                        "condition": "concept",
-                    })
-                    
-                    coh = "✓" if grade.get("coherent", False) else "✗"
-                    aff = "Y" if grade.get("affirmative", False) else "N"
-                    corr = "C" if grade.get("correct_id") else ""
-                    print(f"      [{concept}] {coh} aff={aff} {corr}")
-                    
-                except Exception as e:
-                    print(f"      [{concept}] FAILED: {e}")
-                    layer_strength_results["concept"].append({
-                        "text": None,
-                        "grade": {"error": str(e), "coherent": False},
-                        "trial": trial_idx,
-                        "concept": concept,
-                        "condition": "concept",
-                    })
-                
-                # Save incrementally
-                torch.save({
-                    "results": results,
-                    "stopped_at": stopped_at,
-                    "config": config,
-                    "steering_vectors": steering_vectors_cache,
-                }, save_path)
-            
-            # --- RANDOM VECTOR TRIALS ---
-            existing_random_trials = len(layer_strength_results["random"])
-            random_trials_needed = n_concepts - existing_random_trials
-            
-            if random_trials_needed > 0:
-                print(f"    RANDOM: {random_trials_needed} remaining")
-                
-            for i in range(random_trials_needed):
-                trial_idx = existing_random_trials + i
-                try:
-                    text, geometry = run_random_trial(
-                        trial_idx, args, model, layers, hidden_dim, mean_steering_norm, injection_prompt, layer_idx,
-                        strength, injection_start_pos, use_remote
-                    )
-                    grade = grade_response(client, text, "random", None)
-                    
-                    layer_strength_results["random"].append({
-                        "text": text,
-                        "grade": grade,
-                        "geometry": geometry,
-                        "trial": trial_idx,
-                        "condition": "random",
-                    })
-                    
-                    coh = "✓" if grade.get("coherent", False) else "✗"
-                    aff = "Y" if grade.get("affirmative", False) else "N"
-                    print(f"      [random-{trial_idx}] {coh} aff={aff}")
-                    
-                except Exception as e:
-                    print(f"      [random-{trial_idx}] FAILED: {e}")
-                    layer_strength_results["random"].append({
-                        "text": None,
-                        "grade": {"error": str(e), "coherent": False},
-                        "trial": trial_idx,
-                        "condition": "random",
-                    })
-                
-                torch.save({
-                    "results": results,
-                    "stopped_at": stopped_at,
-                    "config": config,
-                    "steering_vectors": steering_vectors_cache,
-                }, save_path)
-            
-            # --- SCALE TRIALS ---
-            existing_scale_trials = len(layer_strength_results["scale"])
-            scale_trials_needed = n_concepts - existing_scale_trials
-            
-            if scale_trials_needed > 0:
-                print(f"    SCALE: {scale_trials_needed} remaining")
-                
-            if strength > 0:
-                for i in range(scale_trials_needed):
-                    trial_idx = existing_scale_trials + i
-                    try:
-                        text, geometry = run_scale_trial(
-                            model, layers, injection_prompt, layer_idx,
-                            strength, injection_start_pos, use_remote
-                        )
-                        grade = grade_response(client, text, "scale", None)
-                        
-                        layer_strength_results["scale"].append({
-                            "text": text,
-                            "grade": grade,
-                            "geometry": geometry,
-                            "trial": trial_idx,
-                            "condition": "scale",
-                        })
-                        
-                        coh = "✓" if grade.get("coherent", False) else "✗"
-                        aff = "Y" if grade.get("affirmative", False) else "N"
-                        print(f"      [scale-{trial_idx}] {coh} aff={aff}")
-                        
-                    except Exception as e:
-                        print(f"      [scale-{trial_idx}] FAILED: {e}")
-                        layer_strength_results["scale"].append({
-                            "text": None,
-                            "grade": {"error": str(e), "coherent": False},
-                            "trial": trial_idx,
-                            "condition": "scale",
-                        })
-                    
-                    torch.save({
-                        "results": results,
-                        "stopped_at": stopped_at,
-                        "config": config,
-                        "steering_vectors": steering_vectors_cache,
-                    }, save_path)
-            else:
-                print(f"Skipping scaling experiment for strength == 0")
-            
-            # Log coherence stats (no early stopping in all-conditions mode)
-            all_trials = (
-                layer_strength_results["concept"] +
-                layer_strength_results["random"] +
-                layer_strength_results["scale"]
-            )
-            incoherent_count = sum(
-                1 for t in all_trials
-                if not t.get("grade", {}).get("coherent", True)
-            )
-            if incoherent_count > 0:
-                print(f"    -> Coherence: {len(all_trials) - incoherent_count}/{len(all_trials)}")
-    
-    return results, stopped_at, config
-
-
-def print_all_conditions_summary(results: dict, stopped_at: dict, strengths: list):
-    """Print summary for all-conditions experiment."""
-    print("\n" + "=" * 80)
-    print("SUMMARY: ALL CONDITIONS")
-    print("=" * 80)
-    
-    print(f"\n{'Strength':>8} | {'Cond':>7} | {'N':>4} | {'Coh%':>5} | {'Aff%':>5} | {'Ref%':>5} | {'Corr%':>6}")
-    print("-" * 65)
-    
-    for strength in strengths:
-        strength_key = str(strength)
-        
-        for condition in ["concept", "random", "scale"]:
-            all_grades = []
-            
-            for layer_key in results:
-                if strength_key in results[layer_key]:
-                    condition_data = results[layer_key][strength_key].get(condition, [])
-                    for trial in condition_data:
-                        if "grade" in trial and "error" not in trial["grade"]:
-                            all_grades.append(trial["grade"])
-            
-            if all_grades:
-                n = len(all_grades)
-                coh = 100 * sum(1 for g in all_grades if g.get("coherent")) / n
-                aff = 100 * sum(1 for g in all_grades if g.get("affirmative")) / n
-                ref = 100 * sum(1 for g in all_grades if g.get("refusal")) / n
-                
-                if condition == "concept":
-                    corr_trials = [g for g in all_grades if g.get("correct_id") is not None]
-                    corr = 100 * sum(1 for g in corr_trials if g.get("correct_id")) / len(corr_trials) if corr_trials else 0
-                    corr_str = f"{corr:>5.0f}%"
-                else:
-                    corr_str = "  N/A"
-                
-                print(f"{strength:>8} | {condition:>7} | {n:>4} | {coh:>4.0f}% | {aff:>4.0f}% | {ref:>4.0f}% | {corr_str}")
-            else:
-                print(f"{strength:>8} | {condition:>7} | {'--':>4} | {'--':>5} | {'--':>5} | {'--':>5} | {'--':>6}")
-        
-        print("-" * 65)
-
 
 # =============================================================================
 # Summary
@@ -996,8 +612,6 @@ def main():
             random_seed=args.random_seed,
             use_remote=use_remote,
         )
-        
-        print_all_conditions_summary(results, stopped_at, strengths)
         
     else:
         # SINGLE CONDITION MODE (original behavior)
