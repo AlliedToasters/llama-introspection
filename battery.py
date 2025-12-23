@@ -328,7 +328,7 @@ if __name__ == "__main__":
     rows.extend(_new_rows)
     df = pd.DataFrame(rows, columns=output_cols)
     # save final results
-    final_results_path = Path(args.output_dir) / f"introspection_battery_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    final_results_path = Path(args.output_dir) / f"introspection_battery_results_{model_name}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(final_results_path, index=False)
 
     print("\nExperiment complete.")
