@@ -8,7 +8,7 @@ Reproduces experiments from Anthropic's introspection paper on Llama-3.1-Instruc
 
 1. Install dependencies (recommend using a venv):
 ```bash
-pip install nnsight anthropic python-dotenv pandas
+pip install nnsight anthropic python-dotenv pandas matplotlib
 ```
 
 2. Create `.env` file with your API keys:
@@ -31,19 +31,16 @@ Then, pre-compute the steering vectors:
 ```
 python batch_compute.py --use-remote
 ```
-You can omit the `--use-remote` flag if you can run all the big models on your local system.
+You can omit the `--use-remote` flag if you can run the big models on your local system.
 
 After that, to run a battery of interventions on (for example) 1 
 ```
-python battery.py --model 1B --n-control-trials 10 --n-random-trials 10 --n-concept-trials 1 --n-scale-trials 1
+python battery.py --model 8B --n-control-trials 18 --n-random-trials 18 --n-concept-trials 1 --n-scale-trials 18
 ```
 
 ## Output
 
-Results are saved to `results/` directory:
-- `sweep_<hash>.json` - Single trial per strength
-- `multi_<hash>.json` - Multiple trials
-- `graded_*.json` - LLM-judged results
+Results are saved to `results/` directory.
 
 ## Experiment Overview
 
@@ -57,8 +54,8 @@ Results are saved to `results/` directory:
 
 ## Anthropic Introspection Paper Question
 
-The paper tested random vectors as controls. Question: what if you simply *amplify* the model's natural activations (scale them up) instead of adding a semantic steering vector? Would that also trigger detection, suggesting the model is just detecting "loudness" in activation space rather than true introspection?
+This is a response to “Emergent Introspective Awareness in Large Language Models” by Jack Lindsey (Anthropic) and “Can LLMs Introspect? A Live Paper Review,” a video review of the paper by Neel Nanda.
 
-To test this, modify the script to:
-1. Compute `amplified = original_activation * scale_factor` instead of `original + steering_vec * strength`
-2. Compare detection rates between semantic injection vs simple amplification
+Nanda says “I predict [detection] only happens because the injected thing is anomalously big,” and asks “what if you took what the model was thinking about naturally and dialed it up a ton?” as an alternative to steering with random vectors as a control.
+
+This experiment first reproduces a subset of results from Lindsey, and adds a "natural activation scaling" control intervention to the tests.

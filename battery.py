@@ -51,7 +51,13 @@ def unpack_rows(results: dict) -> list:
         geometry = item['geometry']
         pre_norm = geometry['pre_norm']
         post_norm = geometry['post_norm']
-        l2_distance = geometry['l2_distance']
+        l2_distance = geometry.get('l2_distance')
+        if l2_distance is None:
+            print(f"Weird geometry: {geometry}")
+            print(f"Deriving l2_distance from norms...")
+            # this seems to happen only for scale interventions,
+            # so we can just subtract post - pre
+            l2_distance = post_norm - pre_norm
         grade = item['grade']
         # we use 'get' accessor for claude responses because some fields may be missing
         # thanks, Claude
