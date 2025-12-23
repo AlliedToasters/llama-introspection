@@ -218,7 +218,7 @@ def run_concept_trial(
             output = model.generator.output.save()
         geometry = {"pre_norm": 0, "post_norm": 0, "l2_distance": 0}
     else:
-        print(f"running model generation... {10}")
+        print("running model generation...")
         with model.generate(max_new_tokens=MAX_NEW_TOKENS, remote=use_remote) as tracer:
             with tracer.invoke(injection_prompt):
                 with tracer.iter[0]:
