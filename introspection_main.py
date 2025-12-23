@@ -210,12 +210,15 @@ def run_concept_trial(
     use_remote: bool = False,
 ) -> tuple[str, dict]:
     """Run a concept injection trial."""
+
+    print(f"steering vector last element: {steering_vector[0, -1].item():.4f}")
     
     if strength == 0:
         with model.generate(injection_prompt, max_new_tokens=MAX_NEW_TOKENS, remote=use_remote):
             output = model.generator.output.save()
         geometry = {"pre_norm": 0, "post_norm": 0, "l2_distance": 0}
     else:
+        print(f"running model generation... {10}")
         with model.generate(max_new_tokens=MAX_NEW_TOKENS, remote=use_remote) as tracer:
             with tracer.invoke(injection_prompt):
                 with tracer.iter[0]:
@@ -245,6 +248,8 @@ def run_concept_trial(
             "post_norm": post_norm.item(),
             "l2_distance": l2_dist.item(),
         }
+
+        print(f"steering post-norm: {post_norm.item()}")
     
     text = model.tokenizer.decode(output[0], skip_special_tokens=True)
     return text, geometry
