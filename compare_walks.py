@@ -19,6 +19,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 import json
+import hashlib
 
 import torch
 import numpy as np
@@ -40,7 +41,6 @@ try:
 except ImportError:
     NNSIGHT_AVAILABLE = False
     print("Warning: nnsight not available")
-
 
 # =============================================================================
 # Configuration
@@ -130,6 +130,55 @@ class WalkData:
     prompt: str = ""
     response: str = ""  # Generated response text
     
+def get_cache_key(model_name: str, prompt: str, max_tokens: int) -> str:
+    """Generate a cache key for a trajectory run."""
+    import hashlib
+    content = f"{model_name}|{prompt}|{max_tokens}"
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def load_cached_trajectory(cache_dir: Path, cache_key: str) -> Optional[WalkData]:
+    """Load a cached trajectory if it exists."""
+    cache_path = cache_dir / f"trajectory_{cache_key}.json"
+    if not cache_path.exists():
+        return None
+    
+    try:
+        with open(cache_path) as f:
+            data = json.load(f)
+        
+        return WalkData(
+            state_norms=data["state_norms"],
+            update_norms=data["update_norms"],
+            update_alignments=data["update_alignments"],
+            update_state_alignments=data["update_state_alignments"],
+            n_layers=data["n_layers"],
+            hidden_dim=data["hidden_dim"],
+            prompt=data["prompt"],
+            response=data.get("response", ""),
+        )
+    except (json.JSONDecodeError, KeyError) as e:
+        print(f"Warning: corrupted cache file {cache_path}: {e}")
+        return None
+
+
+def save_cached_trajectory(cache_dir: Path, cache_key: str, walk: WalkData):
+    """Save a trajectory to cache."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"trajectory_{cache_key}.json"
+    
+    data = {
+        "state_norms": walk.state_norms,
+        "update_norms": walk.update_norms,
+        "update_alignments": walk.update_alignments,
+        "update_state_alignments": walk.update_state_alignments,
+        "n_layers": walk.n_layers,
+        "hidden_dim": walk.hidden_dim,
+        "prompt": walk.prompt,
+        "response": walk.response,
+    }
+    with open(cache_path, 'w') as f:
+        json.dump(data, f, indent=2)
 
 def get_layer_accessor(model):
     """Return appropriate layer accessor based on model architecture."""
@@ -469,6 +518,8 @@ def parse_args():
                         help="Output directory for plots")
     parser.add_argument("--use-remote", action="store_true",
                         help="Use NDIF remote inference")
+    parser.add_argument("--no-cache", action="store_true",
+                    help="Disable caching (re-run all trajectories)")
     return parser.parse_args()
 
 
@@ -549,16 +600,33 @@ def main():
     print(f"\nCapturing {args.n_gens} trajectories...")
     real_walks = []
     
+    cache_dir = output_dir / "cache" / model_name.replace("/", "_")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_count = 0
+    computed_count = 0
+
     for i, prompt in enumerate(prompts):
-        print(f"  Generation {i + 1}/{args.n_gens}...", end=" ")
-        walk_data = capture_trajectory(
-            model, prompt, max_new_tokens=args.max_tokens, use_remote=args.use_remote
-        )
+        cache_key = get_cache_key(model_name, prompt, args.max_tokens)
+        
+        # Try cache first (unless --no-cache)
+        walk_data = None if args.no_cache else load_cached_trajectory(cache_dir, cache_key)
+        
+        if walk_data:
+            print(f"  Generation {i + 1}/{args.n_gens}... [CACHED]")
+            cached_count += 1
+        else:
+            print(f"  Generation {i + 1}/{args.n_gens}...", end=" ", flush=True)
+            walk_data = capture_trajectory(
+                model, prompt, max_new_tokens=args.max_tokens, use_remote=args.use_remote
+            )
+            save_cached_trajectory(cache_dir, cache_key, walk_data)
+            computed_count += 1
+            print(f"layers={walk_data.n_layers}, final_norm={walk_data.state_norms[-1]:.1f}")
+        
         real_walks.append(walk_data)
-        print(f"layers={walk_data.n_layers}, final_norm={walk_data.state_norms[-1]:.1f}")
-    
-    # Simulate random walks using captured update norms
-    print(f"\nSimulating {args.n_random_walks} random walks...")
+
+    print(f"\nTrajectories: {cached_count} cached, {computed_count} computed")
     
     # Use average update norms across all real walks
     avg_update_norms = np.array([w.update_norms for w in real_walks]).mean(axis=0).tolist()
