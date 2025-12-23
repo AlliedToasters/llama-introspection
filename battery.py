@@ -178,87 +178,89 @@ if __name__ == "__main__":
     exp_hash = hashlib.md5(exp_id.encode()).hexdigest()[:8]
     # Run experiment
     save_path = Path(args.output_dir) / f"exp_battery_{exp_hash}.pt"
-    print(f"\n=== Control Trials ({exp_hash}) ===")
-    results, stopped_at, config = run_experiment(
-        model,
-        hidden_dim,
-        mean_steering_norm,
-        args,
-        model_name,
-        "concept", # with strength 0.0, this is effectively control
-        None, # dummy concept name
-        layers,
-        injection_prompt,
-        injection_start_pos,
-        layer_indices,
-        strengths=[0.0],
-        n_trials=args.n_control_trials,
-        incoherence_tolerance=2,
-        client=client,
-        save_path=save_path,
-        use_remote=use_remote,
-    )
-    _new_rows = unpack_rows(results)
-    # add intervention type
-    for row in _new_rows:
-        row['intervention'] = 'control'
-    rows.extend(_new_rows)
-    df = pd.DataFrame(rows, columns=output_cols)
-    # save intermediate results
-    df.to_csv(Path(args.output_dir) / "introspection_battery_results_tmp.csv", index=False)
-
-    # concept vector runs
-    print(f"\n=== Concept Vector Trials ===")
-    for concept in concepts:
-        # Create experiment hash
-        exp_id = f"{model_name}|concept|{concept}"
-        exp_hash = hashlib.md5(exp_id.encode()).hexdigest()[:8]
-        # Run experiment
-        save_path = Path(args.output_dir) / f"exp_battery_{exp_hash}.pt"
-        print(f"\n--- Concept: {concept} ---")
-        print(f"\nComputing/fetching steering vector for '{concept}'...")
-        result = compute_generic_vector(
-            model=model,
-            model_slug=model_name,
-            concept_word=concept,
-            baseline_words=BASELINE_WORDS,
-            prompt_template=GENERIC_PROMPT_TEMPLATE,
-            cache_dir=args.output_dir,
-            use_remote=use_remote,
-        )
-        # Use vector from injection layer
-        injection_layer = layer_indices[0]
-        steering_vector = result.vectors[injection_layer]
-        print(f"Steering vector norm: {steering_vector.norm().item():.2f}")
-    
+    if args.n_control_trials > 0:
+        print(f"\n=== Control Trials ({exp_hash}) ===")
         results, stopped_at, config = run_experiment(
             model,
             hidden_dim,
             mean_steering_norm,
             args,
             model_name,
-            "concept",
-            concept,
+            "concept", # with strength 0.0, this is effectively control
+            None, # dummy concept name
             layers,
             injection_prompt,
             injection_start_pos,
             layer_indices,
-            strengths=[0.5, 1.0, 2.0, 4.0],
-            n_trials=args.n_concept_trials,
+            strengths=[0.0],
+            n_trials=args.n_control_trials,
             incoherence_tolerance=2,
             client=client,
             save_path=save_path,
-            steering_vector=steering_vector,
             use_remote=use_remote,
         )
         _new_rows = unpack_rows(results)
         # add intervention type
         for row in _new_rows:
-            row['intervention'] = 'concept'
+            row['intervention'] = 'control'
         rows.extend(_new_rows)
         df = pd.DataFrame(rows, columns=output_cols)
         # save intermediate results
         df.to_csv(Path(args.output_dir) / "introspection_battery_results_tmp.csv", index=False)
+
+    if args.n_concept_trials > 0:
+        # concept vector runs
+        print(f"\n=== Concept Vector Trials ===")
+        for concept in concepts:
+            # Create experiment hash
+            exp_id = f"{model_name}|concept|{concept}"
+            exp_hash = hashlib.md5(exp_id.encode()).hexdigest()[:8]
+            # Run experiment
+            save_path = Path(args.output_dir) / f"exp_battery_{exp_hash}.pt"
+            print(f"\n--- Concept: {concept} ---")
+            print(f"\nComputing/fetching steering vector for '{concept}'...")
+            result = compute_generic_vector(
+                model=model,
+                model_slug=model_name,
+                concept_word=concept,
+                baseline_words=BASELINE_WORDS,
+                prompt_template=GENERIC_PROMPT_TEMPLATE,
+                cache_dir=args.output_dir,
+                use_remote=use_remote,
+            )
+            # Use vector from injection layer
+            injection_layer = layer_indices[0]
+            steering_vector = result.vectors[injection_layer]
+            print(f"Steering vector norm: {steering_vector.norm().item():.2f}")
+        
+            results, stopped_at, config = run_experiment(
+                model,
+                hidden_dim,
+                mean_steering_norm,
+                args,
+                model_name,
+                "concept",
+                concept,
+                layers,
+                injection_prompt,
+                injection_start_pos,
+                layer_indices,
+                strengths=[0.5, 1.0, 2.0, 4.0],
+                n_trials=args.n_concept_trials,
+                incoherence_tolerance=2,
+                client=client,
+                save_path=save_path,
+                steering_vector=steering_vector,
+                use_remote=use_remote,
+            )
+            _new_rows = unpack_rows(results)
+            # add intervention type
+            for row in _new_rows:
+                row['intervention'] = 'concept'
+            rows.extend(_new_rows)
+            df = pd.DataFrame(rows, columns=output_cols)
+            # save intermediate results
+            df.to_csv(Path(args.output_dir) / "introspection_battery_results_tmp.csv", index=False)
 
     # random vector runs
     # Create experiment hash
@@ -266,34 +268,35 @@ if __name__ == "__main__":
     exp_hash = hashlib.md5(exp_id.encode()).hexdigest()[:8]
     # Run experiment
     save_path = Path(args.output_dir) / f"exp_battery_{exp_hash}.pt"
-    print(f"\n=== Random Vector Trials ({exp_hash}) ===")
-    results, stopped_at, config = run_experiment(
-        model,
-        hidden_dim,
-        mean_steering_norm,
-        args,
-        model_name,
-        "random",
-        None, # there is no known concept for a random vector
-        layers,
-        injection_prompt,
-        injection_start_pos,
-        layer_indices,
-        strengths=[0.5, 1.0, 2.0, 4.0],
-        n_trials=args.n_random_trials,
-        incoherence_tolerance=2,
-        client=client,
-        save_path=save_path,
-        use_remote=use_remote,
-    )
-    _new_rows = unpack_rows(results)
-    # add intervention type
-    for row in _new_rows:
-        row['intervention'] = 'random'
-    rows.extend(_new_rows)
-    df = pd.DataFrame(rows, columns=output_cols)
-    # save intermediate results
-    df.to_csv(Path(args.output_dir) / "introspection_battery_results_tmp.csv", index=False)
+    if args.n_random_trials > 0:
+        print(f"\n=== Random Vector Trials ({exp_hash}) ===")
+        results, stopped_at, config = run_experiment(
+            model,
+            hidden_dim,
+            mean_steering_norm,
+            args,
+            model_name,
+            "random",
+            None, # there is no known concept for a random vector
+            layers,
+            injection_prompt,
+            injection_start_pos,
+            layer_indices,
+            strengths=[0.5, 1.0, 2.0, 4.0],
+            n_trials=args.n_random_trials,
+            incoherence_tolerance=2,
+            client=client,
+            save_path=save_path,
+            use_remote=use_remote,
+        )
+        _new_rows = unpack_rows(results)
+        # add intervention type
+        for row in _new_rows:
+            row['intervention'] = 'random'
+        rows.extend(_new_rows)
+        df = pd.DataFrame(rows, columns=output_cols)
+        # save intermediate results
+        df.to_csv(Path(args.output_dir) / "introspection_battery_results_tmp.csv", index=False)
 
     # scale vector runs
     # Create experiment hash
@@ -301,33 +304,34 @@ if __name__ == "__main__":
     exp_hash = hashlib.md5(exp_id.encode()).hexdigest()[:8]
     # Run experiment
     save_path = Path(args.output_dir) / f"exp_battery_{exp_hash}.pt"
-    print(f"\n=== Scale Vector Trials ({exp_hash}) ===")
-    results, stopped_at, config = run_experiment(
-        model,
-        hidden_dim,
-        mean_steering_norm,
-        args,
-        model_name,
-        "scale",
-        None, # there is no known concept for a scale vector
-        layers,
-        injection_prompt,
-        injection_start_pos,
-        layer_indices,
-        strengths=[0.5, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0],
-        n_trials=args.n_scale_trials,
-        incoherence_tolerance=2,
-        client=client,
-        save_path=save_path,
-        use_remote=use_remote,
-    )
-    _new_rows = unpack_rows(results)
-    # add intervention type
-    for row in _new_rows:
-        row['intervention'] = 'scale'
-    rows.extend(_new_rows)
-    df = pd.DataFrame(rows, columns=output_cols)
-    # save final results
+    if args.n_scale_trials > 0:
+        print(f"\n=== Scale Vector Trials ({exp_hash}) ===")
+        results, stopped_at, config = run_experiment(
+            model,
+            hidden_dim,
+            mean_steering_norm,
+            args,
+            model_name,
+            "scale",
+            None, # there is no known concept for a scale vector
+            layers,
+            injection_prompt,
+            injection_start_pos,
+            layer_indices,
+            strengths=[0.5, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0],
+            n_trials=args.n_scale_trials,
+            incoherence_tolerance=2,
+            client=client,
+            save_path=save_path,
+            use_remote=use_remote,
+        )
+        _new_rows = unpack_rows(results)
+        # add intervention type
+        for row in _new_rows:
+            row['intervention'] = 'scale'
+        rows.extend(_new_rows)
+        df = pd.DataFrame(rows, columns=output_cols)
+        # save final results
     final_results_path = Path(args.output_dir) / f"introspection_battery_results_{args.model}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(final_results_path, index=False)
 
