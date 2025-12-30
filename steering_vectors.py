@@ -2,12 +2,12 @@
 
 This file is deprecated. Import from llama_introspection.steering instead.
 
-Note: This module still loads prompts.pt for backwards compatibility with
+Note: This module lazily loads prompts.pt for backwards compatibility with
 existing experiment scripts that use BASELINE_WORDS, GENERIC_PROMPT_TEMPLATE,
 and ALL_CONCEPTS.
 """
 
-import torch
+from pathlib import Path
 
 from llama_introspection.steering import (
     SteeringVectorResult,
@@ -28,12 +28,31 @@ from llama_introspection.steering import (
     compute_mean_steering_norm,
 )
 
-# Load prompts data (project-specific, not part of core library)
-_prompts = torch.load("prompts.pt")
+# Lazily load prompts data (project-specific, not part of core library)
+_prompts_cache = None
 
-BASELINE_WORDS = _prompts["baseline_words"]
-GENERIC_PROMPT_TEMPLATE = _prompts["generic_prompt_template"]
-ALL_CONCEPTS = list(_prompts["prompts"].keys())
+
+def _load_prompts():
+    global _prompts_cache
+    if _prompts_cache is None:
+        import torch
+        prompts_path = Path(__file__).parent / "prompts.pt"
+        if prompts_path.exists():
+            _prompts_cache = torch.load(prompts_path, weights_only=False)
+        else:
+            _prompts_cache = {"baseline_words": [], "generic_prompt_template": "", "prompts": {}}
+    return _prompts_cache
+
+
+def __getattr__(name):
+    """Lazy loading for prompts data."""
+    if name == "BASELINE_WORDS":
+        return _load_prompts()["baseline_words"]
+    elif name == "GENERIC_PROMPT_TEMPLATE":
+        return _load_prompts()["generic_prompt_template"]
+    elif name == "ALL_CONCEPTS":
+        return list(_load_prompts()["prompts"].keys())
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     # Core classes and functions from llama_introspection.steering
