@@ -143,8 +143,90 @@ class MockGradingClientSequence:
         return Message([MessageContent(json.dumps(response))])
 
 
+class MockAnthropicMessage:
+    """Mock Anthropic API message response."""
+
+    def __init__(self, text: str):
+        self.content = [type("ContentBlock", (), {"text": text})()]
+
+
+class MockAnthropicMessages:
+    """Mock Anthropic messages API."""
+
+    def __init__(self, grading_client: "MockGradingClient"):
+        self._grading_client = grading_client
+
+    def create(self, model: str, max_tokens: int, messages: list[dict]) -> MockAnthropicMessage:
+        """Create a message using the underlying grading client."""
+        response = self._grading_client.create_message(model, max_tokens, messages)
+        return MockAnthropicMessage(response.content[0].text)
+
+
+class MockAnthropicClient:
+    """Mock Anthropic client that mimics the real API interface.
+
+    This class provides a drop-in replacement for the Anthropic client,
+    allowing end-to-end testing of experiment code without API calls.
+
+    Usage:
+        client = MockAnthropicClient()
+        # Use like real Anthropic client:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            messages=[{"role": "user", "content": "..."}]
+        )
+        text = response.content[0].text
+    """
+
+    def __init__(
+        self,
+        default_coherent: bool = True,
+        default_affirmative: bool = False,
+        detect_concepts: bool = True,
+    ):
+        """Initialize mock client.
+
+        Args:
+            default_coherent: Default coherence value for responses
+            default_affirmative: Default affirmative value
+            detect_concepts: If True, returns correct_id=True when concept is mentioned
+        """
+        self._grading_client = MockGradingClient(
+            default_coherent=default_coherent,
+            default_affirmative=default_affirmative,
+            detect_concepts=detect_concepts,
+        )
+        self.messages = MockAnthropicMessages(self._grading_client)
+
+    @property
+    def call_count(self) -> int:
+        """Number of API calls made."""
+        return self._grading_client.call_count
+
+    @property
+    def last_prompt(self) -> str:
+        """Last prompt sent to the API."""
+        return self._grading_client.last_prompt
+
+
+class MockAnthropicClientFixedResponse:
+    """Mock Anthropic client that returns a fixed response."""
+
+    def __init__(self, response: dict):
+        """Initialize with a fixed response dict."""
+        self._grading_client = MockGradingClientFixedResponse(response)
+        self.messages = MockAnthropicMessages(self._grading_client)
+
+    @property
+    def call_count(self) -> int:
+        return self._grading_client.call_count
+
+
 __all__ = [
     "MockGradingClient",
     "MockGradingClientFixedResponse",
     "MockGradingClientSequence",
+    "MockAnthropicClient",
+    "MockAnthropicClientFixedResponse",
 ]
