@@ -14,34 +14,44 @@ Key extension: Adds a "natural activation scaling" control condition (Neel Nanda
 
 ### Setup
 ```bash
+# Install package in development mode
+pip install -e ".[dev]"
+
 # Copy .env.template to .env and add API keys:
 # - NNSIGHT_API_KEY (for remote model execution via NDIF)
 # - ANTHROPIC_API_KEY (for Claude-as-judge evaluation)
 ```
 
+### Run Tests
+```bash
+pytest                    # Run all tests (71 tests)
+pytest tests/ -v          # Verbose output
+pytest tests/test_experiment_e2e.py  # End-to-end tests only
+```
+
 ### Generate Prompt Configurations
 ```bash
-python generate_prompts.py  # Creates prompts.pt
+python experiments/generate_prompts.py  # Creates prompts.pt
 ```
 
 ### Pre-compute Steering Vectors
 ```bash
-python batch_compute.py              # Local models (1B, 8B)
-python batch_compute.py --use-remote # Include remote models (70B, 405B)
+python experiments/batch_compute.py              # Local models (1B, 8B)
+python experiments/batch_compute.py --use-remote # Include remote models (70B, 405B)
 ```
 
 ### Run Experiments
 
 Single experiment with specific conditions:
 ```bash
-python introspection.py --model 1B --condition concept --concept ocean --n-trials 5
-python introspection.py --model 8B --condition random --n-trials 10
-python introspection.py --model 70B --condition scale --use-remote
+python experiments/introspection.py --model 1B --condition concept --concept ocean --n-trials 5
+python experiments/introspection.py --model 8B --condition random --n-trials 10
+python experiments/introspection.py --model 70B --condition scale --use-remote
 ```
 
 Full battery test:
 ```bash
-python battery.py --model 8B \
+python experiments/battery.py --model 8B \
   --n-control-trials 18 \
   --n-random-trials 18 \
   --n-concept-trials 1 \
@@ -50,29 +60,108 @@ python battery.py --model 8B \
 
 ### Analysis
 ```bash
-python plot_vector_norms.py --results-dir results/
-python compare_walks.py --model 1B --n-gens 5
+python experiments/plot_vector_norms.py --results-dir results/
+python experiments/compare_walks.py --model 1B --n-gens 5
 ```
 
 ## Architecture
 
+### Package Structure
+```
+llama-introspection/
+├── src/llama_introspection/      # Core library
+│   ├── __init__.py
+│   ├── models.py                 # Model shortcuts, config
+│   ├── steering.py               # Steering vector computation
+│   ├── evaluation.py             # Claude-as-judge grading
+│   ├── geometry.py               # Vector norm/distance metrics
+│   └── utils.py                  # KL divergence, token analysis
+├── experiments/                   # Experiment scripts
+│   ├── introspection.py          # Main experiment runner
+│   ├── battery.py                # Batch test runner
+│   ├── batch_compute.py          # Pre-compute vectors
+│   ├── generate_prompts.py       # Generate prompt configs
+│   ├── compare_walks.py          # Random walk analysis
+│   ├── plot_vector_norms.py      # Result visualization
+│   └── activation_geometry_ablation.py
+├── tests/                         # Test suite
+│   ├── conftest.py               # Fixtures (tiny model)
+│   ├── mocks.py                  # Mock clients for testing
+│   ├── test_evaluation.py        # Grading tests
+│   ├── test_experiment_e2e.py    # End-to-end tests
+│   ├── test_geometry.py
+│   ├── test_models.py
+│   ├── test_steering.py
+│   └── test_utils.py
+├── config.py                      # Legacy wrapper (re-exports from package)
+├── steering_vectors.py            # Legacy wrapper (re-exports from package)
+├── util.py                        # Legacy wrapper (re-exports from package)
+└── prompts.pt                     # Generated prompt configurations
+```
+
 ### Core Modules
 
-- **steering_vectors.py** - Central library for computing steering vectors. Handles bespoke (contrastive pairs), generic (mean-subtracted), and random control vectors. Includes caching system and injection position calculation.
+**src/llama_introspection/models.py**
+- `MODEL_SHORTCUTS`: Maps short names (1B, 8B, 70B, 405B) to full HuggingFace IDs
+- `REMOTE_MODELS`: Models requiring NDIF remote execution
+- `DEFAULT_STRENGTHS`, `DEFAULT_SCALE_FACTORS`: Experiment parameters
+- `resolve_model_id()`, `is_remote_model()`: Helper functions
 
-- **introspection.py** - Main experiment runner with four conditions: concept injection, random vector injection, activation scaling, and baseline (no intervention). Supports layer sweeping, early stopping on incoherence, and Claude-as-judge evaluation.
+**src/llama_introspection/steering.py**
+- `SteeringVectorResult`: Container for computed vectors with metadata
+- `compute_bespoke_vector()`: Contrastive pair steering vectors
+- `compute_generic_vector()`: Mean-subtracted concept vectors
+- `compute_random_vector()`: Random baseline vectors
+- `compute_injection_position()`: Find token position for intervention
+- `get_layer_accessor()`, `get_num_layers()`: Model layer utilities
 
-- **battery.py** - Batch test runner that combines all intervention conditions. Outputs results to pandas DataFrame for analysis.
+**src/llama_introspection/evaluation.py**
+- `GradingClient`: Protocol for grading clients (real or mock)
+- `AnthropicGradingClient`: Wrapper for real Anthropic API
+- `grade_response()`: Grade model responses using Claude-as-judge
+- `build_grader_prompt()`: Construct grading prompts
 
-- **util.py** - Model loading, KL divergence computation, plotting utilities, and conditional text generation with hooks.
+**src/llama_introspection/geometry.py**
+- `compute_l2_norm()`, `compute_l2_distance()`, `compute_cosine_similarity()`
+- `compute_intervention_geometry()`: Pre/post intervention metrics
+- `compute_trajectory_stats()`: Activation norm statistics
 
-- **config.py** - Model shortcuts (1B, 8B, 70B, 405B), remote model list, default strengths/scale factors.
+**src/llama_introspection/utils.py**
+- `compute_kl_divergence()`: KL divergence with nucleus filtering
+- `compute_kl_curves()`: KL curves across alpha sweep
+- `get_token_transitions()`: Find where top token changes
 
 ### Key Data Structures
 
 **SteeringVectorResult**: Container for computed vectors with metadata and cache paths.
 
 **Experiment results**: Nested dict `results[layer][strength] = [trial_results]` where each trial includes generated text, geometry metrics (pre/post norms, L2 distance), and Claude grades (affirmative, correct_id, early_detection, coherent).
+
+## Testing
+
+### Test Infrastructure
+- **Tiny model**: `llamafactory/tiny-random-Llama-3` (4.11M params) for fast testing
+- **Mock clients**: `MockAnthropicClient` mimics real API for testing without credits
+- **71 tests total**: Unit tests + end-to-end experiment tests
+
+### Mock Clients (tests/mocks.py)
+```python
+from tests.mocks import MockAnthropicClient
+
+# Drop-in replacement for Anthropic client
+client = MockAnthropicClient()
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=300,
+    messages=[{"role": "user", "content": "..."}]
+)
+```
+
+Available mocks:
+- `MockGradingClient`: Heuristic-based grading
+- `MockAnthropicClient`: Full API interface mock
+- `MockAnthropicClientFixedResponse`: Returns fixed responses
+- `MockGradingClientSequence`: Returns responses from sequence
 
 ## Critical Constraints
 
@@ -88,52 +177,18 @@ python compare_walks.py --model 1B --n-gens 5
 ### Dependencies
 
 Core: nnsight, anthropic, python-dotenv, pandas, matplotlib, numpy, torch
-
-## Development Workflow
-
-### Test-Driven Development
-- Use pytest for all tests, located in `tests/` directory
-- Write tests before and after each module extraction
-- Run tests with `pytest` or `pytest tests/` from project root
-
-### Package Structure (Refactor in Progress)
-- Core library code goes in `src/llama_introspection/`
-- Experiment scripts go in `experiments/` and import from the package
-- Extract modules incrementally—never break existing functionality during refactor
-
-### Refactoring Process
-1. Write tests for existing functionality
-2. Extract module to `src/llama_introspection/`
-3. Verify tests still pass
-4. Update imports in dependent code
-5. Remove old module only after all imports updated
+Dev: pytest, pytest-cov
 
 ## File Reference
 
 - `prompts.pt` - Generated prompt configurations (17 configs including bespoke and generic vectors)
 - `results/` - Cached steering vectors and experiment outputs
 - `assets/` - Result plots and raw CSV data from trials
-- `run_experiment.py` - Legacy experiment runner (superseded by introspection.py)
-- `_old.py` - Deprecated code, safe to ignore
 
-### Module Structure (Target)
-```
-llama-introspection/
-├── src/
-│   └── llama_introspection/
-│       ├── __init__.py
-│       ├── steering.py        # from steering_vectors.py
-│       ├── experiment.py      # core experiment logic from introspection.py
-│       ├── evaluation.py      # Claude-as-judge grading
-│       ├── geometry.py        # vector norm/distance computations
-│       ├── models.py          # model loading, config
-│       └── utils.py           # shared utilities
-├── experiments/
-│   ├── introspection.py       # main introspection experiment
-│   ├── battery.py             # batch runner
-│   └── analysis/
-│       ├── plot_vector_norms.py
-│       └── compare_walks.py
-├── tests/
-│   └── ...
-└── pyproject.toml
+### Legacy Wrappers (for backwards compatibility)
+These files re-export from the `llama_introspection` package:
+- `config.py` → `llama_introspection.models`
+- `steering_vectors.py` → `llama_introspection.steering`
+- `util.py` → `llama_introspection.utils`
+
+New code should import directly from `llama_introspection.*`.
