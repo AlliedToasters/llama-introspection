@@ -1,16 +1,27 @@
 import argparse
+import sys
 from pathlib import Path
 import os
 from dotenv import load_dotenv
 import hashlib
 
+# Add parent directory to path for imports when running from experiments/
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from nnsight import CONFIG, LanguageModel
 from anthropic import Anthropic
 import pandas as pd
 
-from introspection import run_experiment, compute_layer_indices, INJECTION_MESSAGES, ALL_CONCEPTS, BASELINE_WORDS, GENERIC_PROMPT_TEMPLATE
-from config import MODEL_SHORTCUTS, REMOTE_MODELS
-from steering_vectors import (
+from experiments.introspection import (
+    run_experiment,
+    compute_layer_indices,
+    INJECTION_MESSAGES,
+    ALL_CONCEPTS,
+    BASELINE_WORDS,
+    GENERIC_PROMPT_TEMPLATE,
+)
+from llama_introspection.models import MODEL_SHORTCUTS, REMOTE_MODELS
+from llama_introspection.steering import (
     compute_generic_vector,
     compute_injection_position,
     get_layer_accessor,

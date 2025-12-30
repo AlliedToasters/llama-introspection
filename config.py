@@ -1,16 +1,24 @@
-MODEL_SHORTCUTS = {
-    "1B": "meta-llama/Llama-3.2-1B-Instruct",
-    "8B": "meta-llama/Llama-3.1-8B-Instruct",
-    "70B": "meta-llama/Llama-3.1-70B-Instruct",
-    "405B": "meta-llama/Llama-3.1-405B-Instruct",
-}
+"""Legacy config module - re-exports from llama_introspection.models.
 
-# REMOTE_MODELS = {"70B", "405B", "meta-llama/Llama-3.1-70B-Instruct", "meta-llama/Llama-3.1-405B-Instruct"}
-REMOTE_MODELS = {"405B", "meta-llama/Llama-3.1-405B-Instruct"}
+This file is deprecated. Import from llama_introspection.models instead.
+"""
 
-DEFAULT_STRENGTHS = [0.5, 1.0, 2.0, 4.0, 8.0]
+from llama_introspection.models import (
+    MODEL_SHORTCUTS,
+    REMOTE_MODELS,
+    DEFAULT_STRENGTHS,
+    DEFAULT_SCALE_FACTORS,
+    MAX_NEW_TOKENS,
+    resolve_model_id,
+    is_remote_model,
+)
 
-# Scale factors for activation scaling condition
-DEFAULT_SCALE_FACTORS = [0.5, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]
-
-MAX_NEW_TOKENS = 100
+__all__ = [
+    "MODEL_SHORTCUTS",
+    "REMOTE_MODELS",
+    "DEFAULT_STRENGTHS",
+    "DEFAULT_SCALE_FACTORS",
+    "MAX_NEW_TOKENS",
+    "resolve_model_id",
+    "is_remote_model",
+]
