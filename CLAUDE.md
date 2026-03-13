@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Current Branch: `expanded_walk`
+
+This branch extends the random walks experiment to analyze how steering interventions affect activation trajectory dynamics. Key additions:
+- New `trajectory` module for capturing activation trajectories with intervention support
+- New `intervention_geometry.py` experiment comparing trajectory dynamics across conditions
+- 29 new tests for trajectory analysis (100 total tests now)
+
+**PR**: https://github.com/AlliedToasters/llama-introspection/pull/3
+
 ## Project Overview
 
 This project reproduces and extends experiments from Anthropic's introspection paper on LLaMA-3.1-Instruct models. It investigates whether language models can detect when "thoughts" (activation patterns) are injected into their neural networks during generation.
@@ -24,8 +33,9 @@ pip install -e ".[dev]"
 
 ### Run Tests
 ```bash
-pytest                    # Run all tests (71 tests)
+pytest                    # Run all tests (100 tests)
 pytest tests/ -v          # Verbose output
+pytest tests/test_trajectory.py      # Trajectory module tests
 pytest tests/test_experiment_e2e.py  # End-to-end tests only
 ```
 
@@ -64,6 +74,21 @@ python experiments/plot_vector_norms.py --results-dir results/
 python experiments/compare_walks.py --model 1B --n-gens 5
 ```
 
+### Trajectory / Intervention Geometry (expanded_walk branch)
+```bash
+# Compare trajectory dynamics across intervention types
+python experiments/intervention_geometry.py --model 1B --n-trials 3
+
+# With specific concepts and strengths
+python experiments/intervention_geometry.py --model 8B \
+  --concepts ocean fire music \
+  --strengths 0.5 1.0 2.0 \
+  --scale-factors 2.0 4.0
+
+# Test intervention propagation (diagnostic)
+python experiments/test_intervention_propagation.py
+```
+
 ## Architecture
 
 ### Package Structure
@@ -75,6 +100,7 @@ llama-introspection/
 │   ├── steering.py               # Steering vector computation
 │   ├── evaluation.py             # Claude-as-judge grading
 │   ├── geometry.py               # Vector norm/distance metrics
+│   ├── trajectory.py             # Activation trajectory analysis (NEW)
 │   └── utils.py                  # KL divergence, token analysis
 ├── experiments/                   # Experiment scripts
 │   ├── introspection.py          # Main experiment runner
@@ -82,6 +108,8 @@ llama-introspection/
 │   ├── batch_compute.py          # Pre-compute vectors
 │   ├── generate_prompts.py       # Generate prompt configs
 │   ├── compare_walks.py          # Random walk analysis
+│   ├── intervention_geometry.py  # Trajectory dynamics experiment (NEW)
+│   ├── test_intervention_propagation.py  # Diagnostic script (NEW)
 │   ├── plot_vector_norms.py      # Result visualization
 │   └── activation_geometry_ablation.py
 ├── tests/                         # Test suite
@@ -92,6 +120,7 @@ llama-introspection/
 │   ├── test_geometry.py
 │   ├── test_models.py
 │   ├── test_steering.py
+│   ├── test_trajectory.py        # Trajectory module tests (NEW - 29 tests)
 │   └── test_utils.py
 ├── config.py                      # Legacy wrapper (re-exports from package)
 ├── steering_vectors.py            # Legacy wrapper (re-exports from package)
@@ -126,6 +155,17 @@ llama-introspection/
 - `compute_intervention_geometry()`: Pre/post intervention metrics
 - `compute_trajectory_stats()`: Activation norm statistics
 
+**src/llama_introspection/trajectory.py** (NEW)
+- `TrajectoryData`: Dataclass for trajectory metrics and intervention metadata
+  - Properties: `norm_growth_ratio`, `mean_update_alignment`
+  - Fields: `state_norms`, `update_norms`, `update_alignments`, `update_state_alignments`
+  - Intervention fields: `pre_norm`, `post_norm`, `perturbation_norm`, `perturbation_cosine`
+- `compute_trajectory_metrics(states)`: Pure function computing metrics from layer tensors
+- `simulate_random_walks()`: Baseline random walk simulation for comparison
+- `capture_trajectory()`: Capture full trajectory with optional intervention
+  - Supports: `baseline`, `concept`, `random`, `scale` intervention types
+  - Verified: interventions propagate to downstream layers in trace mode
+
 **src/llama_introspection/utils.py**
 - `compute_kl_divergence()`: KL divergence with nucleus filtering
 - `compute_kl_curves()`: KL curves across alpha sweep
@@ -142,7 +182,7 @@ llama-introspection/
 ### Test Infrastructure
 - **Tiny model**: `llamafactory/tiny-random-Llama-3` (4.11M params) for fast testing
 - **Mock clients**: `MockAnthropicClient` mimics real API for testing without credits
-- **71 tests total**: Unit tests + end-to-end experiment tests
+- **100 tests total**: Unit tests + end-to-end experiment tests + trajectory tests
 
 ### Mock Clients (tests/mocks.py)
 ```python

@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import os
+import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -24,6 +25,9 @@ import hashlib
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Load environment
 try:
@@ -41,6 +45,12 @@ try:
 except ImportError:
     NNSIGHT_AVAILABLE = False
     print("Warning: nnsight not available")
+
+# Import from shared trajectory module
+from llama_introspection.trajectory import (
+    simulate_random_walks,
+    get_layer_accessor,
+)
 
 # =============================================================================
 # Configuration
@@ -180,15 +190,6 @@ def save_cached_trajectory(cache_dir: Path, cache_key: str, walk: WalkData):
     with open(cache_path, 'w') as f:
         json.dump(data, f, indent=2)
 
-def get_layer_accessor(model):
-    """Return appropriate layer accessor based on model architecture."""
-    model_name = type(model._model).__name__.lower() if hasattr(model, '_model') else ""
-    if "gpt2" in model_name:
-        return lambda m: m._model.h
-    else:
-        return lambda m: m.model.layers
-
-
 def capture_trajectory(
     model,
     prompt: str,
@@ -258,41 +259,6 @@ def capture_trajectory(
         walk_data.update_alignments.append(cos_sim)
     
     return walk_data
-
-
-def simulate_random_walks(
-    update_norms: list[float],
-    initial_norm: float,
-    hidden_dim: int,
-    n_walks: int = 100,
-) -> np.ndarray:
-    """
-    Simulate random walks with the same step sizes as the real trajectory.
-    
-    In high dimensions, random vectors are nearly orthogonal, so:
-    ||h + u||² ≈ ||h||² + ||u||²
-    
-    Returns: [n_walks, n_steps + 1] array of norms at each step
-    """
-    n_steps = len(update_norms)
-    trajectories = np.zeros((n_walks, n_steps + 1))
-    
-    for w in range(n_walks):
-        # Start with initial state (random direction, given norm)
-        h = np.random.randn(hidden_dim)
-        h = h / np.linalg.norm(h) * initial_norm
-        trajectories[w, 0] = np.linalg.norm(h)
-        
-        # Take steps with random directions but real norms
-        for i, update_norm in enumerate(update_norms):
-            # Random unit vector
-            u = np.random.randn(hidden_dim)
-            u = u / np.linalg.norm(u) * update_norm
-            
-            h = h + u
-            trajectories[w, i + 1] = np.linalg.norm(h)
-    
-    return trajectories
 
 
 def plot_comparison(
